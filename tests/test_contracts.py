@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from flashvsr_plus_plugin.frames import iter_prepared, target_size, unpack_input
-from flashvsr_plus_plugin.models import ensure_models, model_files
+from flashvsr_plus_plugin.models import default_model_roots, ensure_models, model_files
 from flashvsr_plus_plugin.profiles import choose_profile
 from flashvsr_plus_plugin.tiling import blend_mask, tile_grid
 
@@ -99,3 +99,58 @@ def test_download_mapping_is_atomic_and_reusable(tmp_path):
         assert fetch.call_count == 3
     assert not list(root.rglob("*.tmp"))
     assert (root / "prompt_tensor" / "posi_prompt.pth").is_file()
+
+
+def test_default_roots_keep_local_folder_when_desktop_registers_shared_first(tmp_path):
+    local = tmp_path / "ComfyUI" / "models" / "FlashVSR_Plus"
+    shared = tmp_path / "shared" / "FlashVSR_Plus"
+    paths = [str(shared)]
+
+    def register(key, path):
+        assert key == "FlashVSR_Plus"
+        if path not in paths:
+            paths.append(path)
+
+    folders = SimpleNamespace(models_dir=str(local.parent),
+                              add_model_folder_path=register, get_folder_paths=lambda key: paths)
+    with patch.dict("sys.modules", {"folder_paths": folders}):
+        assert default_model_roots() == [shared.resolve(), local.resolve()]
+        assert default_model_roots() == [shared.resolve(), local.resolve()]
+
+
+@pytest.mark.parametrize("mode,decoder", [("turbo", "tiny"), ("base", "vae"), ("v1", "tiny")])
+@pytest.mark.parametrize("auto_download", [True, False])
+def test_local_models_in_second_root_never_access_hub(tmp_path, mode, decoder, auto_download):
+    shared = tmp_path / "shared"
+    local = tmp_path / "ComfyUI" / "models" / "FlashVSR_Plus"
+    for item in model_files(mode, decoder):
+        path = local / item.local
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"local test weights")
+    with patch("huggingface_hub.hf_hub_download", side_effect=AssertionError("network")):
+        result = ensure_models(shared, mode, decoder, auto_download, search_roots=[local])
+    assert Path(result.dit) == local / mode / "dit.safetensors"
+    assert Path(result.context).parent.parent == local
+    assert not shared.exists()
+
+
+def test_split_roots_reuse_shared_decoder_and_v1_alias(tmp_path):
+    shared, local = tmp_path / "shared", tmp_path / "local"
+    shared.mkdir()
+    (shared / "TCDecoder.ckpt").write_bytes(b"decoder")
+    (local / "v1").mkdir(parents=True)
+    (local / "v1" / "diffusion_pytorch_model_streaming_dmd.safetensors").write_bytes(b"dit")
+    (local / "v1" / "LQ_proj_in.ckpt").write_bytes(b"projection")
+    with patch("huggingface_hub.hf_hub_download", side_effect=AssertionError("network")):
+        result = ensure_models(shared, "v1", "tiny", True, search_roots=[local])
+    assert Path(result.tiny_decoder) == shared / "TCDecoder.ckpt"
+    assert Path(result.dit).parent.parent == local
+
+
+def test_missing_local_model_lists_all_searched_paths_without_network(tmp_path):
+    shared, local = tmp_path / "shared", tmp_path / "local"
+    with patch("huggingface_hub.hf_hub_download", side_effect=AssertionError("network")):
+        with pytest.raises(FileNotFoundError) as error:
+            ensure_models(shared, "turbo", "tiny", False, search_roots=[local])
+    assert str(shared / "turbo" / "dit.safetensors") in str(error.value)
+    assert str(local / "turbo" / "dit.safetensors") in str(error.value)

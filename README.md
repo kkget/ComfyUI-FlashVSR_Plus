@@ -150,7 +150,7 @@ python -m pip install triton-windows
 
 ## 模型下载与目录
 
-Loader 默认 `auto_download=true`：首次只下载所选模式的 DiT、LQ projection 和所选 decoder，使用 Hugging Face 的缓存与续传机制，随后原子复制到模型目录。下载保留 Hub 缓存，会额外使用磁盘空间。自动下载使用固定 revision，见 `models.py`；支持标准 HF 缓存、身份认证与 `HF_ENDPOINT` 镜像配置。
+Loader 默认 `auto_download=true`：先检查本地文件，只在所选模式的 DiT、LQ projection 或 decoder 缺失时调用 Hugging Face 下载。**本地文件齐全时不联网，也不发送 HEAD 检查。** 下载使用 Hugging Face 的缓存与续传机制，随后原子复制到模型目录。下载保留 Hub 缓存，会额外使用磁盘空间。自动下载使用固定 revision，见 `models.py`；支持标准 HF 缓存、身份认证与 `HF_ENDPOINT` 镜像配置。
 
 默认模型根目录为 `ComfyUI/models/FlashVSR_Plus/`。可通过 Loader 的 `model_directory` 或 ComfyUI 的 `FlashVSR_Plus` extra model path 指定其他目录。不同模式共享 decoder 与 prompt。
 
@@ -202,7 +202,9 @@ flashvsr_external:
   FlashVSR_Plus: FlashVSR_Plus
 ```
 
-该例的 Turbo 文件路径是 `D:/AI/models/FlashVSR_Plus/turbo/dit.safetensors`。已有多个同名模型路径时，插件选择注册列表中的第一个；需要精确指定位置时使用 Loader 的 `model_directory`。
+该例的 Turbo 文件路径是 `D:/AI/models/FlashVSR_Plus/turbo/dit.safetensors`。`model_directory` 留空时，插件按注册顺序搜索所有 `FlashVSR_Plus` 模型路径，并包含当前 ComfyUI 的 `models/FlashVSR_Plus/`。每个文件都先在所有本地目录查找，全部找不到才下载到第一个目录；不同目录可共用 decoder。ComfyUI Desktop 的空共享目录排在第一位时，不会遮住后面的本地文件。显式填写 `model_directory` 时只搜索该目录。
+
+**手动安装 / 离线运行：** 在 Loader 设置 `model_directory=C:\Comfyui\models\FlashVSR_Plus`（替换为实际路径）、`auto_download=false`。Turbo 使用 `mode=turbo`、`decoder=tiny`，只需上面的三个权重。缺少文件会立即显示已检查路径，不会尝试联网。如果已有模型却仍看到 `HEAD .../turbo/dit.safetensors` 重试，检查本次实际运行的 Loader 参数和日志中的 `FlashVSR+ model search directories` / `using model`；更新前的旧版插件只查第一个注册目录，需更新并重启 ComfyUI，或直接显式填写正确目录。
 
 ## 节点与使用
 
@@ -289,6 +291,7 @@ flashvsr_external:
 | 没有原生 VIDEO 或 Create VIDEO 节点 | 当前 ComfyUI 没有相应 API 时只注册 IMAGE 路径；升级 ComfyUI，或改用 IMAGE/AUDIO + VHS。 |
 | 找不到模型 | 检查 Loader 模式与上述完整路径；`model_directory` 指向模型根目录，不是 `turbo`。确认文件不是下载失败的 HTML 页面，也不是 ZIP/快捷方式。 |
 | Hugging Face 下载失败 | 使用表中直链手动下载，然后关闭 `auto_download`；也可在启动 ComfyUI 前配置可用网络或标准 `HF_ENDPOINT`。插件不会擅自改用第三方镜像。 |
+| 本地已有模型却仍在 HEAD / Retrying | 在 Loader 显式填写模型根目录并设 `auto_download=false`；确认本次工作流使用的参数。更新插件后重启，以启用多目录搜索；旧版只查第一个目录，Desktop 的共享目录可能排在本地目录前面。 |
 | Triton 导入或 kernel 编译失败 | 使用匹配当前 Python/Torch/CUDA 的安装包，先运行 GPU / Backend Check；`auto` 会跳过失败后端，或显式选 `sdpa` + 小 tile。 |
 | CUDA OOM / 24GB 仍分块 | 释放其他 GPU 进程占用；使用 low_vram、tiny、block offload、256/384 tile 与 always cache offload。自动重试已启用时最多重启请求两次。 |
 | 输出高度不是 1080 | 模型要求宽高均为 128 的倍数；1920×1080 不合法，选 1920×1024 或 1920×1152。需要精确 1080p 时在超分后额外裁切/缩放。 |
@@ -348,6 +351,8 @@ ComfyUI/models/FlashVSR_Plus/TCDecoder.ckpt
 
 For example, if ComfyUI is installed at `C:\Comfyui`, the first file belongs at `C:\Comfyui\models\FlashVSR_Plus\turbo\dit.safetensors`. Portable uses `ComfyUI_windows_portable\ComfyUI\models\FlashVSR_Plus\`. Set `auto_download=false` after manual installation. Leave `model_directory` empty for the default root, or point it at the directory containing `turbo/`, not at the `turbo/` subdirectory itself. The extra-model-path YAML example above can move all weights to another disk.
 
+With an empty `model_directory`, the loader searches **all** registered `FlashVSR_Plus` directories plus the current ComfyUI `models/FlashVSR_Plus/` folder before downloading each missing file to the first directory. An empty Desktop shared folder cannot hide weights in another configured directory. An explicit `model_directory` restricts the search to that root. Complete local weights never trigger Hub requests, including HEAD, even with `auto_download=true`. For strict offline use, set `auto_download=false`; missing files immediately report every searched path. The log lists the search directories and the actual files selected.
+
 Turbo/Base and shared decoders come from [ruchangyao/FlashVSR_plus](https://huggingface.co/ruchangyao/FlashVSR_plus/tree/main). V1 comes from [JunhaoZhuang/FlashVSR-v1.1](https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1/tree/main): map `diffusion_pytorch_model_streaming_dmd.safetensors` to `v1/dit.safetensors`, and keep `v1/LQ_proj_in.ckpt` in its original format. The original V1 DiT filename is also accepted inside `v1/`. Never rename a pickle checkpoint to `.safetensors`. The fixed prompt is included and copied automatically. `Wan2.1_VAE.pth` is needed only for `decoder=vae`; the default official path uses `TCDecoder.ckpt`. Base/V1 are optional and not needed for Turbo.
 
 ### Quick workflow
@@ -391,6 +396,7 @@ Drag `image_batch.json`, `native_video.json`, or `pipe_reuse.json` into ComfyUI 
 
 - **Missing nodes:** check the plugin directory nesting, install requirements with the Python that starts ComfyUI, restart and inspect its import log. On older ComfyUI, use IMAGE/AUDIO + VideoHelperSuite instead of native VIDEO.
 - **Missing weights/network failure:** follow the exact relative paths in the download table and disable `auto_download` for offline use. Standard Hugging Face networking/cache configuration and `HF_ENDPOINT` are supported; no third-party mirror is selected automatically.
+- **HEAD retries despite local weights:** explicitly set the correct model root and `auto_download=false` in the workflow being executed. Older plugin versions searched only the first registered folder; update and restart ComfyUI to enable searching every local model directory.
 - **Attention import/JIT failure:** use a Triton package compatible with the current environment, or select `sdpa` with small spatial tiles. Run GPU / Backend Check to inspect the actual selected backend.
 - **CUDA OOM:** close other GPU workloads, select `low_vram`, `offload=block`, `decoder=tiny`, tile 256/384 with overlap 128 and `cache_offload=always`. This does not eliminate host RAM usage.
 - **1080p dimensions:** 1920×1080 is not 128-aligned. Use 1920×1024 or 1920×1152, then crop/resize after super-resolution if an exact 1080p file is required.

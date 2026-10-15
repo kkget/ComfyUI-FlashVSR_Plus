@@ -16,7 +16,7 @@ The automatic result on this machine is `official`, `triton_block_sparse`, `tile
 
 ## Automated checks
 
-**132 tests passed**, including the optional real CUDA tests:
+The original implementation passed **132 tests**, including the optional real CUDA tests:
 
 ```bash
 python -m pytest -q tests --run-cuda --rootdir=tests --confcutdir=tests --basetemp=/path/to/writable/fresh-temp --maxfail=1 --tb=short
@@ -40,6 +40,10 @@ Coverage includes:
 
 The only warning was the environment's pre-existing `pynvml` deprecation warning from Torch.
 
+After fixing Desktop multi-directory model lookup, the updated default suite passed **137 tests, with 4 optional CUDA tests skipped**. New regression checks cover an empty shared folder before a populated local folder, automatic downloads enabled and disabled, Turbo/Base/V1, shared decoder reuse, V1 aliases, preserving configured path priority and missing-file path reporting. Hub downloads are blocked in the local-model tests so any unexpected network attempt fails the test. The optional CUDA tests were not rerun for this model-path change.
+
+The installed Desktop extra-model-path configuration was also loaded in a separate diagnostic process. Its first shared directory had no weights; the second local directory contained all three Turbo/tiny weights. With `auto_download=true` and Hub downloading blocked, the fixed resolver selected all three local files and made **zero Hub calls**. This diagnostic did not start, restart or submit a generation to ComfyUI.
+
 ## Additional checks against installed ComfyUI
 
 - All five node classes import and expose their schemas using the actual hyphenated plugin module name.
@@ -60,7 +64,7 @@ Use the Python interpreter belonging to ComfyUI. `--comfyui-path` points to the 
 
 ## Limits of this validation
 
-Complete DiT/projection/decoder weights were **not downloaded or run** during this implementation. No full pretrained restoration result, image-quality equivalence, official-preset 1080p/2K peak-memory figure, or speed benchmark is claimed. Wan VAE tiled decode is connected to the upstream API but was not executed with its full pretrained checkpoint. Real BSA execution was unavailable on this machine; selection falls through to the tested bundled Triton backend.
+The complete Turbo DiT, LQ projection and TinyDecoder checkpoints have been downloaded and verified against their published SHA256 hashes. Local path resolution was verified without Hub access. Full pretrained inference has **not** been run: no pretrained restoration result, image-quality equivalence, official-preset 1080p/2K peak-memory figure, or speed benchmark is claimed. Wan VAE tiled decode is connected to the upstream API but was not executed with its full pretrained checkpoint. Real BSA execution was unavailable on this machine; selection falls through to the tested bundled Triton backend.
 
 The automatic memory policies and OOM restart were tested functionally; the smaller-GPU policies were exercised using controlled capacity values and a synthetic OOM, not physical 8/12/16GB cards. Tests of reduced models verify execution/numerics/state handling, not pretrained quality or full-model peak VRAM.
 

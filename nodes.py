@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from .frames import create_video, native_video_available, unpack_input
-from .models import default_model_root, ensure_models
+from .models import default_model_roots, ensure_models
 
 CATEGORY = "FlashVSR+"
 PIPE = "FLASHVSR_PLUS_PIPE"
@@ -22,8 +22,11 @@ class FlashVSRPlusLoader:
             "attn_backend": (["auto", "block_sparse", "triton_block_sparse", "sdpa"],),
             "offload": (["auto", "model", "block", "disabled"],),
             "decoder": (["tiny", "vae"], {"default": "tiny"}),
-            "auto_download": ("BOOLEAN", {"default": True}),
-            "model_directory": ("STRING", {"default": "", "tooltip": "Empty: ComfyUI/models/FlashVSR_Plus"}),
+            "auto_download": ("BOOLEAN", {"default": True,
+                                         "tooltip": "Download missing files only. False: strictly local, no network."}),
+            "model_directory": ("STRING", {"default": "", "tooltip":
+                "Empty: search all FlashVSR_Plus model paths and ComfyUI/models/FlashVSR_Plus. "
+                "Explicit: only this root (containing turbo/base/v1)."}),
             "reload_token": ("INT", {"default": 0, "min": 0, "max": 2147483647,
                                       "tooltip": "Change after explicitly unloading a cached PIPE."}),
         }}
@@ -44,8 +47,9 @@ class FlashVSRPlusLoader:
         with torch.cuda.device(device):
             if not torch.cuda.is_bf16_supported():
                 raise RuntimeError("FlashVSR+ requires CUDA BF16 support.")
-        root = Path(model_directory).expanduser().resolve() if model_directory.strip() else default_model_root()
-        paths = ensure_models(root, mode, decoder, auto_download)
+        roots = ([Path(model_directory.strip()).expanduser().resolve()]
+                 if model_directory.strip() else default_model_roots())
+        paths = ensure_models(roots[0], mode, decoder, auto_download, search_roots=roots[1:])
         pipe = FlashVSRPlusPipe(mode=mode, paths=paths, device=device,
                                profile=profile, attn_backend=attn_backend, offload=offload, decoder=decoder)
         return pipe, json.dumps(pipe.initial_profile.to_dict(), indent=2)
