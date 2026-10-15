@@ -9,7 +9,7 @@ import threading
 import torch
 
 from .frames import iter_prepared, target_size
-from .memory import install_block_offload, install_decoder_offload, install_interrupt_checks, release_bundle
+from .memory import ensure_cpu_output_fits, install_block_offload, install_decoder_offload, install_interrupt_checks, release_bundle
 from .profiles import choose_profile, resolve_backend
 from .tiling import blend_mask, tile_grid
 
@@ -95,21 +95,30 @@ class FlashVSRPlusPipe:
                 self.pipeline = None
                 self.closed = True
 
-    def _run_tile(self, images, height, width, tile, fps, progress):
+    def _run_tile(self, images, height, width, tile, fps, progress, segment_writer=None):
         from .vendor.runtime.inference import InferenceRequest
         from .vendor.runtime.inference.preprocessing import TemporalVideoStream
         config = self.pipeline.config
+        if segment_writer is not None and config.decoder.decode_every == "auto":
+            raise ValueError("Streaming VIDEO output requires decoder=tiny and numeric decode_every.")
         if config.decoder.decode_every == "auto":
             prepared = torch.cat(list(iter_prepared(images, height, width, 16, tile, interrupt)), dim=2)
             result = self.pipeline.infer(InferenceRequest(lq_video=prepared, fps=fps), progress=progress)
             return result.video, result.metadata
         # Same TemporalVideoStream -> StreamRunner as pipeline.infer's numeric
         # decode_every branch, with a bounded IMAGE source replacing OpenCV.
-        source = iter_prepared(images, height, width,
-                               config.decoder.decode_every * config.temporal_compression, tile, interrupt)
+        chunk_frames = config.decoder.decode_every * config.temporal_compression
+        source = (images.iter_prepared(height, width, chunk_frames, tile, interrupt)
+                  if hasattr(images, "iter_prepared") else
+                  iter_prepared(images, height, width, chunk_frames, tile, interrupt))
         stream = TemporalVideoStream(source, config.temporal_compression, 4)
         try:
-            result = self.pipeline.runner.run(stream, None, progress=progress)
+            result = self.pipeline.runner.run(stream, None, progress=progress, segment_writer=segment_writer)
+            if segment_writer is not None:
+                if segment_writer.frame_count != stream.source_frames:
+                    raise RuntimeError("Streaming writer returned an incorrect source frame count.")
+                return None, {**result.metadata, "source_frames": stream.source_frames,
+                              "output_frames": segment_writer.frame_count}
             value = result.video[:, :, :stream.source_frames]
             if value.shape[2] != images.shape[0]:
                 raise RuntimeError(f"Official stream returned {value.shape[2]} frames for {images.shape[0]} inputs.")
@@ -118,11 +127,13 @@ class FlashVSRPlusPipe:
         finally:
             stream.close()
 
-    def _run_once(self, images, height, width, tiles, overlap, fps, progress):
+    def _run_once(self, images, height, width, tiles, overlap, fps, progress, video_sink=None):
         bundle = self.pipeline.bundle
         bundle.denoiser.to(self.device)
         if self._active_offload == "disabled":
             bundle.decoder.module.to(self.device)
+        if video_sink is not None:
+            return video_sink.render(self, images, height, width, tiles, overlap, fps, progress)
         output = torch.zeros((images.shape[0], height, width, 3), dtype=torch.float32, device="cpu")
         weights = torch.zeros((height, width), dtype=torch.float32)
         metadata = {}
@@ -151,9 +162,13 @@ class FlashVSRPlusPipe:
                 tiled="auto", tile_size=512, tile_overlap=128, color_fix=False,
                 color_correction_levels=5, seed=1, cache_offload="auto", decode_every=4,
                 vae_tiled=True, vae_tile_size=256, vae_tile_overlap=64,
-                oom_retry=True, fps=24.0, progress=None):
+                oom_retry=True, fps=24.0, progress=None, _video_sink=None):
         from .vendor.runtime.inference.postprocessing import WaveletColorCorrector
         height, width = target_size(images, scale, height, width)
+        if _video_sink is None:
+            ensure_cpu_output_fits(images.shape[0], height, width)
+        elif self.decoder_kind != "tiny" or decode_every == 0:
+            raise ValueError("Streaming VIDEO requires decoder=tiny and decode_every>=4.")
         if tiled not in {"auto", "enabled", "disabled"}:
             raise ValueError("tiled must be auto, enabled or disabled.")
         if temporal_compression not in (1, 2, 4):
@@ -210,7 +225,9 @@ class FlashVSRPlusPipe:
                     tiles = tile_grid(height, width, size, overlap) if use_tiles else [(0, 0, height, width)]
                     exhausted = False
                     try:
-                        output, metadata = self._run_once(images, height, width, tiles, overlap if use_tiles else 0, fps, progress)
+                        args = (images, height, width, tiles, overlap if use_tiles else 0, fps, progress)
+                        output, metadata = (self._run_once(*args) if _video_sink is None else
+                                            self._run_once(*args, video_sink=_video_sink))
                         metadata.update({"mode": self.mode, "profile": profile.to_dict(), "attn_backend": self.backend,
                                          "tiled": use_tiles, "tile_size": size if use_tiles else None,
                                          "tile_count": len(tiles), "offload": self._active_offload,

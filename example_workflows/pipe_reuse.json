@@ -85,7 +85,17 @@
         true,
         "",
         0
-      ]
+      ],
+      "widgets_values_named": {
+        "mode": "turbo",
+        "profile": "auto",
+        "attn_backend": "auto",
+        "offload": "auto",
+        "decoder": "tiny",
+        "auto_download": true,
+        "model_directory": "",
+        "reload_token": 0
+      }
     },
     {
       "id": 3,
@@ -174,7 +184,27 @@
         64,
         true,
         24.0
-      ]
+      ],
+      "widgets_values_named": {
+        "scale": 4.0,
+        "height": 0,
+        "width": 0,
+        "temporal_compression": 4,
+        "tiled": "auto",
+        "tile_size": 512,
+        "tile_overlap": 128,
+        "color_fix": false,
+        "color_correction_levels": 5,
+        "seed": 1,
+        "cache_offload": "auto",
+        "decode_every": 4,
+        "vae_tiled": true,
+        "vae_tile_size": 256,
+        "vae_tile_overlap": 64,
+        "oom_retry": true,
+        "fps": 24.0,
+        "control_after_generate": "fixed"
+      }
     },
     {
       "id": 4,
@@ -331,7 +361,27 @@
         64,
         true,
         24.0
-      ]
+      ],
+      "widgets_values_named": {
+        "scale": 4.0,
+        "height": 0,
+        "width": 0,
+        "temporal_compression": 4,
+        "tiled": "auto",
+        "tile_size": 512,
+        "tile_overlap": 128,
+        "color_fix": false,
+        "color_correction_levels": 5,
+        "seed": 1,
+        "cache_offload": "auto",
+        "decode_every": 4,
+        "vae_tiled": true,
+        "vae_tile_size": 256,
+        "vae_tile_overlap": 64,
+        "oom_retry": true,
+        "fps": 24.0,
+        "control_after_generate": "fixed"
+      }
     },
     {
       "id": 7,

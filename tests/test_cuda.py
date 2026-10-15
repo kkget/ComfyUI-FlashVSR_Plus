@@ -114,3 +114,45 @@ def test_complete_pipe_reuse_and_oom_restart(monkeypatch):
     torch.testing.assert_close(third,reference,atol=.02,rtol=.02)
     pipe.close()
     assert pipe.closed and pipe.pipeline is None
+
+
+@pytest.mark.cuda
+def test_actual_cuda_pipe_streams_to_file_and_recovers_oom(tmp_path, monkeypatch):
+    import json
+    from flashvsr_plus_plugin.pipeline import FlashVSRPlusPipe
+    from test_video_streaming import lossless_clip
+    from flashvsr_plus_plugin.video_streaming import VideoFileSource, VideoFileSink
+    monkeypatch.setattr("flashvsr_plus_plugin.pipeline.prepare_device", lambda _: None)
+    monkeypatch.setattr("flashvsr_plus_plugin.pipeline.interrupt", lambda: None)
+    pipe = FlashVSRPlusPipe.__new__(FlashVSRPlusPipe)
+    pipe.lock = threading.RLock()
+    pipe.device = torch.device("cuda:0")
+    pipe.mode, pipe.decoder_kind = "turbo", "tiny"
+    pipe.profile_request, pipe.offload_request = "official", "model"
+    pipe.backend, pipe.closed = "triton_block_sparse", False
+    pipe._block_adapter_installed = pipe._decoder_offload_installed = False
+    pipe._active_offload = None
+    pipe.pipeline = miniature_pipeline(pipe.backend)
+    path = tmp_path / "source.mkv"
+    lossless_clip(path, 18)
+    source = VideoFileSource(path)
+    sink = VideoFileSink(tmp_path / "output.mp4", tmp_path)
+    original = pipe._run_once
+    calls = []
+    def fail_once(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise torch.cuda.OutOfMemoryError("deliberate file-output recovery test")
+        return original(*args, **kwargs)
+    pipe._run_once = fail_once
+    try:
+        result, info = pipe.upscale(source, scale=1, tiled="disabled", _video_sink=sink)
+        metadata = json.loads(info)
+        assert Path(result).is_file()
+        assert metadata["output_frames"] == 18
+        assert metadata["output_storage"] == "video_file"
+        assert len(calls) == 2 and len(metadata["oom_retries"]) == 1
+        assert metadata["offload"] == "block"
+        assert not list(tmp_path.glob("flashvsr-tiles-*"))
+    finally:
+        pipe.close()

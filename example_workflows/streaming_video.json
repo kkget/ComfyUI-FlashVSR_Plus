@@ -1,0 +1,256 @@
+{
+  "last_node_id": 4,
+  "last_link_id": 3,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadVideo",
+      "pos": [
+        0,
+        30
+      ],
+      "size": [
+        290,
+        160
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadVideo"
+      },
+      "widgets_values": [
+        "example.mp4"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "FlashVSRPlusLoader",
+      "pos": [
+        0,
+        240
+      ],
+      "size": [
+        340,
+        298
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "pipe",
+          "type": "FLASHVSR_PLUS_PIPE",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "FlashVSRPlusLoader"
+      },
+      "widgets_values": [
+        "turbo",
+        "auto",
+        "auto",
+        "auto",
+        "tiny",
+        true,
+        "",
+        0
+      ],
+      "widgets_values_named": {
+        "mode": "turbo",
+        "profile": "auto",
+        "attn_backend": "auto",
+        "offload": "auto",
+        "decoder": "tiny",
+        "auto_download": true,
+        "model_directory": "",
+        "reload_token": 0
+      }
+    },
+    {
+      "id": 3,
+      "type": "FlashVSRPlusVideoUpscale",
+      "pos": [
+        420,
+        30
+      ],
+      "size": [
+        340,
+        584
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 1
+        },
+        {
+          "name": "pipe",
+          "type": "FLASHVSR_PLUS_PIPE",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "links": [
+            3
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "pipe",
+          "type": "FLASHVSR_PLUS_PIPE",
+          "links": null,
+          "slot_index": 1
+        },
+        {
+          "name": "info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 2
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "FlashVSRPlusVideoUpscale"
+      },
+      "widgets_values": [
+        2.0,
+        0,
+        0,
+        4,
+        "auto",
+        512,
+        128,
+        false,
+        5,
+        1,
+        "fixed",
+        "auto",
+        4,
+        true,
+        256,
+        64,
+        true,
+        18,
+        true
+      ],
+      "widgets_values_named": {
+        "scale": 2.0,
+        "height": 0,
+        "width": 0,
+        "temporal_compression": 4,
+        "tiled": "auto",
+        "tile_size": 512,
+        "tile_overlap": 128,
+        "color_fix": false,
+        "color_correction_levels": 5,
+        "seed": 1,
+        "cache_offload": "auto",
+        "decode_every": 4,
+        "vae_tiled": true,
+        "vae_tile_size": 256,
+        "vae_tile_overlap": 64,
+        "oom_retry": true,
+        "crf": 18,
+        "keep_audio": true,
+        "control_after_generate": "fixed"
+      }
+    },
+    {
+      "id": 4,
+      "type": "SaveVideo",
+      "pos": [
+        850,
+        30
+      ],
+      "size": [
+        290,
+        160
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 3
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveVideo"
+      },
+      "widgets_values": [
+        "FlashVSR_Plus/streaming",
+        "auto",
+        "auto"
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      3,
+      0,
+      "VIDEO"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      1,
+      "FLASHVSR_PLUS_PIPE"
+    ],
+    [
+      3,
+      3,
+      0,
+      4,
+      0,
+      "VIDEO"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.7,
+      "offset": [
+        20,
+        20
+      ]
+    }
+  },
+  "version": 0.4
+}

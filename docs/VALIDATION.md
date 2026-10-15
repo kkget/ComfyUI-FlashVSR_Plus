@@ -44,12 +44,14 @@ After fixing Desktop multi-directory model lookup, the updated default suite pas
 
 The installed Desktop extra-model-path configuration was also loaded in a separate diagnostic process. Its first shared directory had no weights; the second local directory contained all three Turbo/tiny weights. With `auto_download=true` and Hub downloading blocked, the fixed resolver selected all three local files and made **zero Hub calls**. This diagnostic did not start, restart or submit a generation to ComfyUI.
 
+The subsequent file-backed VIDEO implementation passed **156 tests including all 5 CUDA tests**. New coverage includes real FFmpeg/OpenCV file round-trips through the unchanged official runner at temporal compression 1/2/4, 1/18/33 source frames, overlapping spatial tiles, bounded input windows, disk-space rejection, interruption cleanup, rejection of the reported 254.71 GiB IMAGE allocation before full native VIDEO decoding, and retaining all 24 video frames when source audio lasts only 0.1 seconds. A real CUDA reduced-model test exercises file output plus a deliberately injected OOM/restart and block offload.
+
 ## Additional checks against installed ComfyUI
 
-- All five node classes import and expose their schemas using the actual hyphenated plugin module name.
+- All six current node classes import and expose their schemas against the installed core; the original five were also checked using the actual hyphenated plugin module name.
 - Native `VideoFromComponents` round-trip preserves the original IMAGE tensor, AUDIO object and source FPS.
-- All three UI JSON workflows have valid link indices/types and match the installed plugin's input names.
-- Both API JSON examples provide all required plugin inputs.
+- All four UI JSON workflows have valid link indices/types and matching named/positional plugin widget values.
+- All three API JSON examples provide all required plugin inputs.
 - No global `models`, `inference` or `model_io` package aliases are introduced.
 - Vendored Python file hashes and the bundled official context tensor match `vendor/manifest.json`.
 - Python compilation of plugin/source files succeeds.
@@ -64,10 +66,10 @@ Use the Python interpreter belonging to ComfyUI. `--comfyui-path` points to the 
 
 ## Limits of this validation
 
-The complete Turbo DiT, LQ projection and TinyDecoder checkpoints have been downloaded and verified against their published SHA256 hashes. Local path resolution was verified without Hub access. Full pretrained inference has **not** been run: no pretrained restoration result, image-quality equivalence, official-preset 1080p/2K peak-memory figure, or speed benchmark is claimed. Wan VAE tiled decode is connected to the upstream API but was not executed with its full pretrained checkpoint. Real BSA execution was unavailable on this machine; selection falls through to the tested bundled Triton backend.
+The complete Turbo DiT, LQ projection and TinyDecoder checkpoints have been downloaded and verified against their published SHA256 hashes. Local path resolution was verified without Hub access. A **single synthetic 128x128 frame** was subsequently run through the complete official Turbo weights and both actual Loader/Streaming VIDEO node methods, using `low_vram`, block offload and bundled Triton. Native `VideoFromFile` input was normalized to temporary Matroska and the encoded output verified as exactly one 128x128 frame. The PIPE was explicitly closed afterward. This verifies full-weight execution at that tiny size only; no restoration-quality equivalence, full-resolution 1080p/2K memory figure, 360-frame execution or speed benchmark is claimed. Wan VAE tiled decode was not executed with its full pretrained checkpoint. Real BSA execution was unavailable; bundled official Triton was used.
 
 The automatic memory policies and OOM restart were tested functionally; the smaller-GPU policies were exercised using controlled capacity values and a synthetic OOM, not physical 8/12/16GB cards. Tests of reduced models verify execution/numerics/state handling, not pretrained quality or full-model peak VRAM.
 
 Linux and ComfyUI versions without native VIDEO were not run here. The code feature-detects that API and keeps IMAGE/AUDIO registration available. The JSON files were structurally checked against the installed APIs; no live ComfyUI queue run or screenshot of the browser canvas is claimed.
 
-Suggested first pretrained check: import `native_video.json`, choose a short source clip, use turbo/auto/tiny at a small 128-aligned target, then increase to 1920×1024 or 1920×1152 and inspect the returned JSON for backend, tile count, retry history and actual peak allocated memory. Compare `tiled=disabled` and `enabled` on the same clip/seed before choosing a long-video policy.
+Suggested first full-resolution check: import `streaming_video.json`, choose a short source clip, use turbo/auto/tiny at a modest 128-aligned target, then increase dimensions while checking temporary disk requirements and the returned backend/tile/retry metadata. Use `native_video.json` when IMAGE output is required and RAM is sufficient. Compare tiled and untiled output on the same short clip/seed before choosing a long-video policy.

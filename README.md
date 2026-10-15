@@ -9,10 +9,10 @@
 ## 中文快速开始
 
 1. 按下方命令克隆到 `ComfyUI/custom_nodes/ComfyUI-FlashVSR_Plus`，用 **ComfyUI 自己的 Python** 安装依赖，然后重启 ComfyUI。
-2. 将 [native_video.json](example_workflows/native_video.json) 拖入画布并选择自己的视频。旧版 ComfyUI 或 VHS 用户使用 [image_batch.json](example_workflows/image_batch.json)。
+2. 视频优先将 [streaming_video.json](example_workflows/streaming_video.json) 拖入画布并选择自己的视频；需要 IMAGE 帧输出时使用 [native_video.json](example_workflows/native_video.json)。旧版 ComfyUI 或 VHS 用户使用 [image_batch.json](example_workflows/image_batch.json)。
 3. Loader 先用 `mode=turbo`、`profile=auto`、`attn_backend=auto`、`offload=auto`、`decoder=tiny`。`auto_download=true` 会下载所需模型；手动安装只需下表中 **Turbo 的两个文件 + TCDecoder.ckpt**。
 4. Upscale 先用短视频测试，设置 `scale=2`、`height=0`、`width=0`、`tiled=auto`、`temporal_compression=4`、`cache_offload=auto`、`decode_every=4`、`oom_retry=true`。确认成功后再增加片长与尺寸。
-5. 原生 VIDEO 路径把输出 `images/audio/fps` 接到 `FlashVSR+ Create VIDEO`，再接内置 `SaveVideo`。IMAGE/VHS 路径的音频和 FPS 接法见工作流章节。
+5. Streaming 节点的 `video` 直接接 `SaveVideo`。普通 IMAGE 输出路径将 `images/audio/fps` 接到 `FlashVSR+ Create VIDEO`，再接 `SaveVideo`。IMAGE/VHS 路径的接法见工作流章节。
 
 **模型目录是 `ComfyUI/models/FlashVSR_Plus/`，不是插件目录。** 如果你的 ComfyUI 位于 `C:\Comfyui`，模型就放在 `C:\Comfyui\models\FlashVSR_Plus\`。完整预训练模型的画质、1080p/2K 显存与速度尚未在本项目中实测，详见[验证记录](docs/VALIDATION.md)。
 
@@ -41,6 +41,7 @@ ComfyUI-FlashVSR_Plus/
 ├── pipeline.py                 # PIPE 生命周期、官方流式调用、OOM 重试
 ├── profiles.py                 # 显存策略、真实 CUDA 后端检查
 ├── memory.py                   # DiT block / decoder offload
+├── video_streaming.py          # 连续时序推理、磁盘 tile 暂存、逐帧编码
 ├── frames.py                   # IMAGE / VIDEO、官方 bicubic 预处理
 ├── tiling.py                   # 空间网格及重叠融合
 ├── models.py                   # 自动下载、模型路径、V1 文件名映射
@@ -57,9 +58,11 @@ ComfyUI-FlashVSR_Plus/
 ├── example_workflows/
 │   ├── image_batch.json        # 可拖入的 ComfyUI 工作流
 │   ├── native_video.json       # LoadVideo → Upscale → VIDEO → SaveVideo
+│   ├── streaming_video.json    # LoadVideo → Streaming Upscale → SaveVideo
 │   ├── pipe_reuse.json         # 一个 PIPE 供两次推理使用
 │   ├── image_batch_api.json    # /prompt API 格式
-│   └── native_video_api.json
+│   ├── native_video_api.json
+│   └── streaming_video_api.json
 ├── scripts/
 │   ├── check_install.py
 │   ├── make_workflows.py
@@ -214,11 +217,12 @@ flashvsr_external:
 |---|---|
 | `FlashVSR+ Load PIPE (Auto VRAM)` | 加载模型一次，输出可重复使用的 `FLASHVSR_PLUS_PIPE` 和策略说明 |
 | `FlashVSR+ Upscale (IMAGE / VIDEO)` | 接 IMAGE 批次或 VIDEO，输出 IMAGE、原 AUDIO、FPS、原 PIPE 和推理信息 |
+| `FlashVSR+ Upscale VIDEO (Streaming)` | VIDEO → VIDEO 文件；持续时序推理、磁盘暂存空间 tiles、逐帧合成编码，支持音频透传；避免完整 IMAGE 占满 RAM |
 | `FlashVSR+ Create VIDEO` | 使用输出帧、FPS、可选 AUDIO 创建原生 VIDEO，再接内置 SaveVideo |
 | `FlashVSR+ Unload PIPE` | 释放 CPU/CUDA 模型；接超分后的 images 确保执行顺序 |
 | `FlashVSR+ GPU / Backend Check` | 检测总/空闲显存，并实际检查注意力后端，不下载模型 |
 
-`images` 与 `video` **只接一个**。VIDEO 使用当前 ComfyUI 的 `get_components()` 接口提取帧、音频和精确来源 FPS；若同时外接 AUDIO，以外接音频为准。旧版本不注册 Create VIDEO，Upscale 仍支持传统 IMAGE + AUDIO；用 VideoHelperSuite 保存即可。
+普通 Upscale 的 `images` 与 `video` **只接一个**。此节点使用当前 ComfyUI 的 `get_components()` 接口提取帧、音频和精确来源 FPS；若同时外接 AUDIO，以外接音频为准。Streaming 节点使用文件路径，见下文。旧版本不注册 Create VIDEO / Streaming VIDEO，Upscale 仍支持传统 IMAGE + AUDIO；用 VideoHelperSuite 保存即可。
 
 模型默认驻留 CPU RAM，在需要时搬入显卡。PIPE 可跨多个 Upscale 节点、多个队列任务复用；ComfyUI 正常缓存 Loader 时不会重新读取权重。每次推理都会新建时序状态，前一条视频的 KV/decoder 缓存不会污染下一条。显式 Unload 后，增加 Loader 的 `reload_token` 重新加载。自动升级到 block offload 后，该 PIPE 会继续保留 block offload；要恢复更快的驻留策略，重新加载 PIPE。
 
@@ -246,9 +250,21 @@ flashvsr_external:
 |---|---|---|
 | [image_batch.json](example_workflows/image_batch.json) | 单图或 IMAGE 批次 → 超分 → SaveImage | ComfyUI 内置节点 + 本插件 |
 | [native_video.json](example_workflows/native_video.json) | 视频 → 超分 → 保存视频，透传音频/FPS | 提供原生 VIDEO API 的 ComfyUI + 本插件 |
+| [streaming_video.json](example_workflows/streaming_video.json) | 视频 → 流式超分 → SaveVideo，默认 2×，无需整段 IMAGE 输出 | 原生 VIDEO API；Loader decoder=tiny |
 | [pipe_reuse.json](example_workflows/pipe_reuse.json) | 一个 Loader 供两个 Upscale 复用 | ComfyUI 内置节点 + 本插件 |
 | [image_batch_api.json](example_workflows/image_batch_api.json) | IMAGE 路径的 `/prompt` 请求体 | API 示例，修改输入文件名后使用 |
 | [native_video_api.json](example_workflows/native_video_api.json) | VIDEO 路径的 `/prompt` 请求体 | 原生 VIDEO API；修改输入文件名后使用 |
+| [streaming_video_api.json](example_workflows/streaming_video_api.json) | 流式 VIDEO 的 `/prompt` 请求体 | 原生 VIDEO API；修改输入文件名后使用 |
+
+#### 长视频 / 系统内存不足：Streaming VIDEO
+
+拖入 `streaming_video.json`，选择视频，设置 Loader `decoder=tiny`，将 Streaming 节点的 `video` 输出直接接 `SaveVideo`。该路径沿用官方 `TemporalVideoStream → StreamRunner(segment_writer=...)`，每个空间 tile 在整段视频中保留连续的 KV/decoder 状态。它不把视频切成彼此独立的推理段，也不创建完整输出 IMAGE 批次。`decode_every` 至少为 4，VAE decoder 暂不支持此文件输出路径。
+
+输入 VIDEO 先通过 ComfyUI 的 `save_to()` 准备临时文件，文件型 VIDEO 的裁剪/时间截取由原生 API 处理。每个 tile 的输出片段以 **RGB8** 暂存磁盘，再逐帧按重叠权重融合，编码成 H.264/yuv420p；这会增加一次 8 位量化，与 float32 IMAGE 路径存在细微差异。`crf=18` 为默认输出质量，`keep_audio=true` 保留来源音轨；不兼容 MP4 的音轨转 AAC。音频较短时仍保留全部视频帧。
+
+临时文件位于 ComfyUI temp 目录，tile 暂存和输入副本会在成功、失败或取消后清理；返回的临时 VIDEO 保留到 ComfyUI 清理 temp，务必接 `SaveVideo` 持久保存。开始时会检查临时磁盘空间，空间不足可减小目标尺寸，或在启动参数中用 `--temp-directory` 指向更大磁盘。内存不再按完整视频输出增长，但空间 tiles 的原始 RGB8 暂存大小仍与帧数和目标面积成正比，运行时间也会随 tile 数增加。
+
+例：360 帧、1472×2688 的视频再放大 4×得到 5888×10752，float32 IMAGE 输出本身就需要 **254.71 GiB RAM**。仅改小 GPU tile 无法解决这个问题。Streaming 可以避免完整 IMAGE 分配，但 4×目标仍可能需要超过 100 GiB 临时磁盘。运行前先确认输入是否已被其他超分节点放大，避免重复放大。
 
 #### 原生 VIDEO：加载并保存视频
 
@@ -283,7 +299,7 @@ flashvsr_external:
 
 两档策略内置于同一个插件，不需要装两个插件。自动选择会受**当前空闲显存**影响；24GB+ 显卡在被其他程序占用时也可能选择低显存策略。`info` 包含所选后端、策略、输出尺寸、tile 与重试信息，可连接文本查看节点或查看日志。
 
-**长视频的限制：** 默认增量路径只保持有限的 GPU 工作区，输出 IMAGE 仍需要完整 CPU 内存；原生 `VIDEO.get_components()` 也会解出完整帧集合。1920×1152 RGB float32 每帧约 25MiB，1000 帧仅最终输出就约 24.7GiB，融合和上游解码还需要额外空间。当前不是磁盘到磁盘的恒定 RAM 转码器。对很长的视频应分段处理并在保存时拼接；跨独立调用只复用权重，不延续 KV 时序状态，分段边界可能不同。音频应与分段时间线一起裁切，或在拼接完成后统一封装。
+**长视频的限制：** 普通 Upscale 的 IMAGE 输出仍需要完整 CPU 内存，原生 `VIDEO.get_components()` 也会解出完整帧集合。1920×1152 RGB float32 每帧约 25MiB，1000 帧仅最终输出就约 24.7GiB。插件会在输出最低内存需求超过当前可用 RAM 的 75% 时提前报出尺寸、帧数及估算，不会自动缩小结果。长视频保存为文件请使用上述 Streaming VIDEO；独立分段调用只复用权重，不延续时序状态。
 
 ## 常见问题
 
@@ -295,12 +311,13 @@ flashvsr_external:
 | Hugging Face 下载失败 | 使用表中直链手动下载，然后关闭 `auto_download`；也可在启动 ComfyUI 前配置可用网络或标准 `HF_ENDPOINT`。插件不会擅自改用第三方镜像。 |
 | 本地已有模型却仍在 HEAD / Retrying | 在 Loader 显式填写模型根目录并设 `auto_download=false`；确认本次工作流使用的参数。更新插件后重启，以启用多目录搜索；旧版只查第一个目录，Desktop 的共享目录可能排在本地目录前面。 |
 | Triton 导入或 kernel 编译失败 | 使用匹配当前 Python/Torch/CUDA 的安装包，先运行 GPU / Backend Check；`auto` 会跳过失败后端，或显式选 `sdpa` + 小 tile。 |
+| `skipping block_sparse: No module named block_sparse_attn` | 自动后端选择的信息日志；插件会继续尝试官方内置 Triton，再尝试 SDPA。查看后面的 `selected attention backend`。已有可用 Triton 时可显式选择 `triton_block_sparse`，无需安装 BSA。 |
 | CUDA OOM / 24GB 仍分块 | 释放其他 GPU 进程占用；使用 low_vram、tiny、block offload、256/384 tile 与 always cache offload。自动重试已启用时最多重启请求两次。 |
 | 输出高度不是 1080 | 模型要求宽高均为 128 的倍数；1920×1080 不合法，选 1920×1024 或 1920×1152。需要精确 1080p 时在超分后额外裁切/缩放。 |
 | 色彩、构图或 tile 边缘有差别 | 预处理使用官方中心裁剪/bicubic，比例改变会裁边；可试 `color_fix`。空间 tiles 会改变全局上下文，可增加 tile 或在显存允许时关闭分块。 |
 | 视频静音 / 速度不对 | IMAGE 输入需额外提供音频和真实 FPS，保存节点也使用该 FPS；原生 VIDEO 示例已连好透传。插件不插帧。 |
 | PIPE has been unloaded | 增加 Loader 的 `reload_token` 后重新执行。 |
-| 系统内存不足 / 长视频进程退出 | 缩短每批帧数并分段保存。CPU offload 与完整 IMAGE 输出仍占 RAM，空间 tiling 不能消除最终输出帧的内存需求。 |
+| 系统内存不足 / `DefaultCPUAllocator` | 使用 Streaming VIDEO 直接输出视频文件，或缩短帧数/降低输出尺寸。GPU offload 和 tiling 不会消除完整 IMAGE 输出所需 RAM。 |
 
 诊断命令（激活 ComfyUI 环境后，从插件目录执行）：
 
@@ -394,7 +411,11 @@ Explicit height/width must both be divisible by 128. Leave both at zero to use s
 
 CUDA OOM recovery restarts the complete request with smaller tiles and stronger offload, up to two retries; it preserves the requested resolution and frame count. It can enable tiles even after `tiled=disabled`, unless `oom_retry=false` is also set. Actual resolution/VRAM limits depend on the workload and are not guaranteed.
 
-Drag `image_batch.json`, `native_video.json`, or `pipe_reuse.json` into ComfyUI and select your own input files. Files ending in `_api.json` are `/prompt` API examples. Native VIDEO passes audio/FPS through to Create VIDEO and SaveVideo. Long clips still require CPU memory for the complete IMAGE output; this is not a constant-RAM file-to-file transcoder. Independent segments reuse weights but reset temporal history.
+Drag `image_batch.json`, `native_video.json`, or `pipe_reuse.json` into ComfyUI and select your own input files. Files ending in `_api.json` are `/prompt` API examples. These IMAGE-returning workflows pass audio/FPS through to Create VIDEO and SaveVideo and need CPU memory for the complete IMAGE output. Independent segments reuse weights but reset temporal history.
+
+For long clips, use **`streaming_video.json`: LoadVideo → Upscale VIDEO (Streaming) → SaveVideo**. It requires `decoder=tiny`, numeric `decode_every>=4`, and defaults to 2×. The official runner keeps continuous KV/decoder state across the entire timeline of each spatial tile. Its segment writer spools RGB8 tiles to disk, then composites/encodes one frame at a time to H.264/yuv420p. No complete IMAGE output is allocated; the 8-bit tile spool adds quantization compared with float32 IMAGE. `keep_audio=true` copies compatible audio or converts it to AAC; a short audio track never truncates video. File-backed native input is prepared through ComfyUI `save_to()`, including its trim/crop handling.
+
+The node checks temporary disk space before inference and removes input/tile spools on success, failure and cancellation. The returned VIDEO is a temporary file: connect SaveVideo for persistent output. Set ComfyUI `--temp-directory` to a larger disk if needed. Disk usage grows with frame count, output area and tile overlap, even though output RAM does not grow with the full timeline. The standard IMAGE node now rejects a minimum output allocation exceeding 75% of available RAM, reporting the requested dimensions/frame count. Spatial GPU tiling cannot remove the RAM required by a complete IMAGE batch.
 
 ### Troubleshooting
 
@@ -402,10 +423,11 @@ Drag `image_batch.json`, `native_video.json`, or `pipe_reuse.json` into ComfyUI 
 - **Missing weights/network failure:** follow the exact relative paths in the download table and disable `auto_download` for offline use. Standard Hugging Face networking/cache configuration and `HF_ENDPOINT` are supported; no third-party mirror is selected automatically.
 - **HEAD retries despite local weights:** explicitly set the correct model root and `auto_download=false` in the workflow being executed. Older plugin versions searched only the first registered folder; update and restart ComfyUI to enable searching every local model directory.
 - **Attention import/JIT failure:** use a Triton package compatible with the current environment, or select `sdpa` with small spatial tiles. Run GPU / Backend Check to inspect the actual selected backend.
+- **`skipping block_sparse` message:** this is informational when using `auto`. The loader next tries bundled official Triton and then SDPA; check `selected attention backend`. BSA is optional.
 - **CUDA OOM:** close other GPU workloads, select `low_vram`, `offload=block`, `decoder=tiny`, tile 256/384 with overlap 128 and `cache_offload=always`. This does not eliminate host RAM usage.
 - **1080p dimensions:** 1920×1080 is not 128-aligned. Use 1920×1024 or 1920×1152, then crop/resize after super-resolution if an exact 1080p file is required.
 - **Silent video/wrong speed:** connect audio and the actual FPS from your IMAGE video loader, and use the same FPS when saving. Upscale does not perform frame interpolation.
-- **Unloaded PIPE:** increase Loader `reload_token`. **Long clips exhausting RAM:** process and save shorter segments; the output is still a complete IMAGE batch in CPU memory.
+- **Unloaded PIPE:** increase Loader `reload_token`. **Long clips exhausting RAM:** use Streaming VIDEO or shorter/lower-resolution IMAGE batches.
 
 Run `python scripts/check_install.py --comfyui-path /path/to/ComfyUI` from the plugin directory with the ComfyUI environment active. The path is the core source directory containing `comfy/` and `comfy_api/`; Desktop may store it separately from the user models folder. This command neither downloads weights nor starts the server.
 

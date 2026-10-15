@@ -33,15 +33,18 @@ def definitions(cls,video=False):
 def custom(node_id,cls,x,y,video=False):
     widgets,inputs = definitions(cls,video)
     values = []
+    named = dict(widgets)
     for name,value in widgets.items():
         values.append(value)
         if name == "seed":
             values.append("fixed")
+            named["control_after_generate"] = "fixed"
     outputs = [{"name":name,"type":kind,"links":None,"slot_index":index}
                for index,(name,kind) in enumerate(zip(getattr(cls,"RETURN_NAMES",cls.RETURN_TYPES),cls.RETURN_TYPES))]
     return {"id":node_id,"type":cls.__name__,"pos":[x,y],"size":[340,max(120,90+len(values)*26)],
             "flags":{},"order":node_id-1,"mode":0,"inputs":inputs,"outputs":outputs,
-            "properties":{"Node name for S&R":cls.__name__},"widgets_values":values}
+            "properties":{"Node name for S&R":cls.__name__},"widgets_values":values,
+            "widgets_values_named":named}
 
 
 def standard(node_id,kind,x,y,inputs,outputs,widgets):
@@ -114,6 +117,23 @@ def main():
         "5":{"class_type":"SaveVideo","inputs":{"video":["4",0],"filename_prefix":"FlashVSR_Plus/video",
                                                        "format":"auto","codec":"auto"}},
     }
+    streaming = graph()
+    streaming["nodes"] = [
+        standard(1,"LoadVideo",0,30,[],[("VIDEO","VIDEO")],["example.mp4"]),
+        custom(2,nodes.FlashVSRPlusLoader,0,240),
+        custom(3,nodes.FlashVSRPlusVideoUpscale,420,30),
+        standard(4,"SaveVideo",850,30,[("video","VIDEO")],[],["FlashVSR_Plus/streaming","auto","auto"]),
+    ]
+    connect(streaming,1,0,3,"video")
+    connect(streaming,2,0,3,"pipe")
+    connect(streaming,3,0,4,"video")
+    streaming_api = {
+        "1":{"class_type":"LoadVideo","inputs":{"file":"example.mp4"}},
+        "2":api_custom(nodes.FlashVSRPlusLoader),
+        "3":api_custom(nodes.FlashVSRPlusVideoUpscale,pipe=["2",0],video=["1",0]),
+        "4":{"class_type":"SaveVideo","inputs":{"video":["3",0],"filename_prefix":"FlashVSR_Plus/streaming",
+                                                       "format":"auto","codec":"auto"}},
+    }
     reuse = copy.deepcopy(image)
     reuse["nodes"].extend([
         standard(5,"LoadImage",0,950,[],[("IMAGE","IMAGE"),("MASK","MASK")],["example_2.png","image"]),
@@ -124,11 +144,13 @@ def main():
     connect(reuse,5,0,6,"images")
     connect(reuse,6,0,7,"images")
     for name,data in (("image_batch",image),("native_video",video),("pipe_reuse",reuse),
-                      ("image_batch_api",image_api),("native_video_api",video_api)):
+                      ("streaming_video",streaming),("image_batch_api",image_api),
+                      ("native_video_api",video_api),("streaming_video_api",streaming_api)):
         if "nodes" in data:
             data["last_node_id"] = max(n["id"] for n in data["nodes"])
-        (directory / (name+".json")).write_text(json.dumps(data,indent=2,ensure_ascii=False)+"\n",encoding="utf-8")
-    print("Generated 3 UI workflows and 2 API prompts.")
+        (directory / (name+".json")).write_text(json.dumps(data,indent=2,ensure_ascii=False)+"\n",
+                                              encoding="utf-8", newline="\n")
+    print("Generated 4 UI workflows and 3 API prompts.")
 
 
 if __name__ == "__main__":

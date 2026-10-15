@@ -4,8 +4,9 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
-from .frames import create_video, native_video_available, unpack_input
+from .frames import create_video, native_video_available, target_size, unpack_input
 from .models import default_model_roots, ensure_models
 
 CATEGORY = "FlashVSR+"
@@ -90,6 +91,17 @@ class FlashVSRPlusUpscale:
     DESCRIPTION = "Connect IMAGE or native VIDEO. Return exactly the source frame count on CPU; preserve audio/FPS."
 
     def upscale(self, pipe, images=None, video=None, audio=None, fps=24.0, **kwargs):
+        # File-backed VIDEO can expose dimensions without decoding the full clip.
+        if images is None and video is not None and all(hasattr(video, method) for method in
+                                                        ("get_dimensions", "get_frame_count")):
+            from .memory import ensure_cpu_output_fits
+            width, height = video.get_dimensions()
+            frames = video.get_frame_count()
+            if frames > 0:
+                shape = SimpleNamespace(shape=(frames, height, width, 3))
+                height, width = target_size(shape, kwargs.get("scale", 4.0),
+                                            kwargs.get("height", 0), kwargs.get("width", 0))
+                ensure_cpu_output_fits(frames, height, width)
         images, audio, fps = unpack_input(images=images, video=video, audio=audio, fps=fps)
         import comfy.model_management as mm
         def progress(message):
@@ -97,6 +109,58 @@ class FlashVSRPlusUpscale:
             log.info("FlashVSR+: %s", message)
         output, info = pipe.upscale(images, fps=fps, progress=progress, **kwargs)
         return output, audio, fps, pipe, info
+
+
+class FlashVSRPlusVideoUpscale:
+    @classmethod
+    def INPUT_TYPES(cls):
+        required = dict(FlashVSRPlusUpscale.INPUT_TYPES()["required"])
+        required.pop("fps")
+        required["scale"] = ("FLOAT", {"default": 2.0, "min": .25, "max": 8.0, "step": .25})
+        required["decode_every"] = ("INT", {"default": 4, "min": 4, "max": 128, "step": 4})
+        return {"required": {"video": ("VIDEO",), **required,
+                             "crf": ("INT", {"default": 18, "min": 0, "max": 40}),
+                             "keep_audio": ("BOOLEAN", {"default": True})}}
+
+    RETURN_TYPES = ("VIDEO", PIPE, "STRING")
+    RETURN_NAMES = ("video", "pipe", "info")
+    FUNCTION = "upscale"
+    CATEGORY = CATEGORY
+    DESCRIPTION = ("Write long VIDEO with bounded RAM using the official continuous temporal runner. "
+                   "Requires tiny decoder; spatial tiles use temporary RGB8 disk storage. Connect to SaveVideo.")
+
+    def upscale(self, pipe, video, crf=18, keep_audio=True, **kwargs):
+        import tempfile
+        import uuid
+        import folder_paths
+        import comfy.model_management as mm
+        from comfy_api.latest import InputImpl
+        from .video_streaming import VideoFileSource, VideoFileSink
+        if pipe.decoder_kind != "tiny" or kwargs.get("decode_every", 4) < 4:
+            raise ValueError("Streaming VIDEO requires Loader decoder=tiny and decode_every>=4.")
+
+        def progress(message):
+            mm.throw_exception_if_processing_interrupted()
+            log.info("FlashVSR+: %s", message)
+
+        temporary = Path(folder_paths.get_temp_directory())
+        temporary.mkdir(parents=True, exist_ok=True)
+        destination = temporary / f"flashvsr-plus-{uuid.uuid4().hex}.mp4"
+        try:
+            with tempfile.TemporaryDirectory(prefix="flashvsr-source-", dir=temporary) as work:
+                source_path = Path(work) / "source.mkv"
+                progress("Preparing file-backed VIDEO input")
+                # Current native file VIDEO remuxes or transcodes this incrementally,
+                # applying upstream trim/crop without get_components() materialization.
+                video.save_to(str(source_path))
+                source = VideoFileSource(source_path)
+                sink = VideoFileSink(destination, temporary, crf=crf, keep_audio=keep_audio)
+                path, info = pipe.upscale(source, fps=source.fps, progress=progress,
+                                          _video_sink=sink, **kwargs)
+            return InputImpl.VideoFromFile(path), pipe, info
+        except BaseException:
+            destination.unlink(missing_ok=True)
+            raise
 
 
 class FlashVSRPlusToVideo:
@@ -174,10 +238,12 @@ NODE_CLASS_MAPPINGS = {
 }
 if native_video_available():
     NODE_CLASS_MAPPINGS["FlashVSRPlusToVideo"] = FlashVSRPlusToVideo
+    NODE_CLASS_MAPPINGS["FlashVSRPlusVideoUpscale"] = FlashVSRPlusVideoUpscale
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "FlashVSRPlusLoader": "FlashVSR+ Load PIPE (Auto VRAM)",
     "FlashVSRPlusUpscale": "FlashVSR+ Upscale (IMAGE / VIDEO)",
+    "FlashVSRPlusVideoUpscale": "FlashVSR+ Upscale VIDEO (Streaming)",
     "FlashVSRPlusToVideo": "FlashVSR+ Create VIDEO",
     "FlashVSRPlusUnload": "FlashVSR+ Unload PIPE",
     "FlashVSRPlusDiagnostics": "FlashVSR+ GPU / Backend Check",

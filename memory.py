@@ -7,6 +7,23 @@ import types
 import torch
 
 
+def ensure_cpu_output_fits(frames, height, width):
+    """Reject impossible IMAGE results before allocating them or moving CUDA weights."""
+    import psutil
+    output_bytes = int(frames) * int(height) * int(width) * 3 * 4
+    minimum_bytes = output_bytes + int(height) * int(width) * 4
+    available = psutil.virtual_memory().available
+    if minimum_bytes > available * .75:
+        raise RuntimeError(
+            f"FlashVSR+ IMAGE output needs at least {output_bytes / 2**30:.2f} GiB RAM "
+            f"for {frames} frames at {width}x{height}; only {available / 2**30:.2f} GiB is available. "
+            "Use FlashVSR+ Upscale VIDEO (Streaming) to write video without a full IMAGE batch, "
+            "or reduce the output dimensions/frame count. GPU tiling/offload cannot reduce "
+            "the RAM required by the complete IMAGE output."
+        )
+    return output_bytes
+
+
 def install_interrupt_checks(denoiser, check):
     for block in denoiser.blocks:
         original = block.forward_stream

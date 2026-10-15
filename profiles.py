@@ -76,6 +76,7 @@ def resolve_backend(requested: str, device: torch.device):
     for candidate in candidates:
         try:
             probe_backend(candidate, device)
+            log.info("FlashVSR+ selected attention backend: %s", candidate)
             return candidate
         except Exception as error:
             if requested != "auto":
