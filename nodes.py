@@ -64,7 +64,10 @@ class FlashVSRPlusUpscale:
             optional["video"] = ("VIDEO",)
         return {"required": {
             "pipe": (PIPE,),
-            "scale": ("FLOAT", {"default": 4.0, "min": 0.25, "max": 8.0, "step": 0.25}),
+            "scale": ("FLOAT", {"default": 1.0, "min": 0.25, "max": 8.0, "step": 0.25,
+                                "tooltip": "Start at 1x with a short clip. Multiplies BOTH width and height; "
+                                "2x means about 4x pixels, 4x means about 16x pixels. "
+                                "Set height=width=0 to use scale; sizes round up to multiples of 128."}),
             "height": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 128}),
             "width": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 128}),
             "temporal_compression": ([4, 2, 1],),
@@ -99,7 +102,7 @@ class FlashVSRPlusUpscale:
             frames = video.get_frame_count()
             if frames > 0:
                 shape = SimpleNamespace(shape=(frames, height, width, 3))
-                height, width = target_size(shape, kwargs.get("scale", 4.0),
+                height, width = target_size(shape, kwargs.get("scale", 1.0),
                                             kwargs.get("height", 0), kwargs.get("width", 0))
                 ensure_cpu_output_fits(frames, height, width)
         images, audio, fps = unpack_input(images=images, video=video, audio=audio, fps=fps)
@@ -116,7 +119,6 @@ class FlashVSRPlusVideoUpscale:
     def INPUT_TYPES(cls):
         required = dict(FlashVSRPlusUpscale.INPUT_TYPES()["required"])
         required.pop("fps")
-        required["scale"] = ("FLOAT", {"default": 2.0, "min": .25, "max": 8.0, "step": .25})
         required["decode_every"] = ("INT", {"default": 4, "min": 4, "max": 128, "step": 4})
         return {"required": {"video": ("VIDEO",), **required,
                              "crf": ("INT", {"default": 18, "min": 0, "max": 40}),

@@ -21,7 +21,7 @@
   "3": {
     "class_type": "FlashVSRPlusVideoUpscale",
     "inputs": {
-      "scale": 2.0,
+      "scale": 1.0,
       "height": 0,
       "width": 0,
       "temporal_compression": 4,

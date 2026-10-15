@@ -158,7 +158,7 @@ class FlashVSRPlusPipe:
         return output, metadata
 
     @torch.inference_mode()
-    def upscale(self, images, *, scale=4.0, height=0, width=0, temporal_compression=4,
+    def upscale(self, images, *, scale=1.0, height=0, width=0, temporal_compression=4,
                 tiled="auto", tile_size=512, tile_overlap=128, color_fix=False,
                 color_correction_levels=5, seed=1, cache_offload="auto", decode_every=4,
                 vae_tiled=True, vae_tile_size=256, vae_tile_overlap=64,

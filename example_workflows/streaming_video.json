@@ -141,7 +141,7 @@
         "Node name for S&R": "FlashVSRPlusVideoUpscale"
       },
       "widgets_values": [
-        2.0,
+        1.0,
         0,
         0,
         4,
@@ -162,7 +162,7 @@
         true
       ],
       "widgets_values_named": {
-        "scale": 2.0,
+        "scale": 1.0,
         "height": 0,
         "width": 0,
         "temporal_compression": 4,

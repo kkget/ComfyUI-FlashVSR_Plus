@@ -4,14 +4,38 @@
 
 社区适配插件，使用官方代码与权重；并非 OpenImagingLab 官方发布的 ComfyUI 扩展。模型权重单独下载。
 
-[中文快速开始](#中文快速开始) · [安装](#中文安装) · [模型下载与目录](#模型下载与目录) · [工作流](#示例工作流) · [故障排查](#常见问题) · [English](#english-installation-and-usage) · [实现分析](docs/ARCHITECTURE.md) · [验证记录](docs/VALIDATION.md)
+[倍率与内存](#scale-and-memory) · [中文快速开始](#中文快速开始) · [安装](#中文安装) · [模型下载与目录](#模型下载与目录) · [工作流](#示例工作流) · [故障排查](#常见问题) · [English](#english-installation-and-usage) · [实现分析](docs/ARCHITECTURE.md) · [验证记录](docs/VALIDATION.md)
+
+<a id="scale-and-memory"></a>
+
+## 先看倍率：默认 1×，从低内存开始
+
+**所有示例工作流、普通 IMAGE / VIDEO 节点和 Streaming VIDEO 节点均默认 `scale=1.0`、`height=0`、`width=0`。先用短视频验证，再根据资源增加倍率。** 模型预设 Turbo / Base / V1 不决定输出倍率；自动显存策略也不会自动降低你指定的输出尺寸。
+
+**Start at `scale=1.0`, `height=width=0` with a short clip.** All examples and both upscale nodes now use this default. Scale multiplies **both** dimensions: 2× means approximately 4× pixels; 4× means approximately 16× pixels. Increase it only after checking RAM, VRAM and temporary disk space. See the [English scale guide](#scale-and-memory-start-at-1x).
+
+`scale` 同时乘输入的宽和高，像素数及完整 IMAGE 输出内存大致按 **倍率的平方** 增长，帧数翻倍还会再翻倍。以 **1472×2688、360 帧、RGB float32** 为例：
+
+| `scale` | 实际输出宽×高（向上对齐 128） | 像素数约为输入的 | 仅完整 IMAGE 输出所需 RAM |
+|---|---|---|---|
+| **1×（默认）** | 1536×2688 | 1 倍 | **16.61 GiB** |
+| 2× | 2944×5376 | 4 倍 | **63.68 GiB** |
+| 4× | 5888×10752 | 16 倍 | **254.71 GiB** |
+
+表中不含输入帧、模型、缓存和其他程序，因此 64GB 内存也无法容纳上述 2× 的完整处理过程。这是输出张量的计算值，不是显存或速度实测。
+
+- **内存紧张先用 1×，高分辨率输入可先试 0.5×**，确认短视频成功后再试 1.5× / 2× / 4×。1× 仍运行模型，并向上对齐 128；不是跳过处理，也不保证任意片长都能运行。
+- **修改倍率时，将 `height` 和 `width` 都设为 0。** 显式宽高会覆盖 `scale`，仅调低倍率不会改变这些固定输出尺寸。
+- **已经放大过的视频要按当前输入尺寸计算。** 上游已做 2×，本节点再设 2×，相对最初输入就是约 4× 宽高、16 倍像素。
+- **长视频优先用 Streaming VIDEO → SaveVideo。** 它避免完整 IMAGE 输出占满 RAM，但磁盘 tile 暂存仍随帧数、输出面积和重叠增加；tiling / offload 主要降低显存，不能消除普通 IMAGE 批次的 RAM。
+- **已有画布保留原来的 2× / 4×。** 更新插件后，新建节点或重新导入新版示例才会使用 1×；已有工作流请在画布手动改 `scale` 并保存。程序修改 JSON 时同步 `widgets_values` 与 `widgets_values_named`，随后重新导入。
 
 ## 中文快速开始
 
 1. 按下方命令克隆到 `ComfyUI/custom_nodes/ComfyUI-FlashVSR_Plus`，用 **ComfyUI 自己的 Python** 安装依赖，然后重启 ComfyUI。
 2. 视频优先将 [streaming_video.json](example_workflows/streaming_video.json) 拖入画布并选择自己的视频；需要 IMAGE 帧输出时使用 [native_video.json](example_workflows/native_video.json)。旧版 ComfyUI 或 VHS 用户使用 [image_batch.json](example_workflows/image_batch.json)。
 3. Loader 先用 `mode=turbo`、`profile=auto`、`attn_backend=auto`、`offload=auto`、`decoder=tiny`。`auto_download=true` 会下载所需模型；手动安装只需下表中 **Turbo 的两个文件 + TCDecoder.ckpt**。
-4. Upscale 先用短视频测试，设置 `scale=2`、`height=0`、`width=0`、`tiled=auto`、`temporal_compression=4`、`cache_offload=auto`、`decode_every=4`、`oom_retry=true`。确认成功后再增加片长与尺寸。
+4. Upscale 先用短视频测试，保留低内存起步的默认值 `scale=1.0`、`height=0`、`width=0`，以及 `tiled=auto`、`temporal_compression=4`、`cache_offload=auto`、`decode_every=4`、`oom_retry=true`。确认资源充足后再增加片长与尺寸；倍率说明见上方重点提示。
 5. Streaming 节点的 `video` 直接接 `SaveVideo`。普通 IMAGE 输出路径将 `images/audio/fps` 接到 `FlashVSR+ Create VIDEO`，再接 `SaveVideo`。IMAGE/VHS 路径的接法见工作流章节。
 
 **模型目录是 `ComfyUI/models/FlashVSR_Plus/`，不是插件目录。** 如果你的 ComfyUI 位于 `C:\Comfyui`，模型就放在 `C:\Comfyui\models\FlashVSR_Plus\`。完整预训练模型的画质、1080p/2K 显存与速度尚未在本项目中实测，详见[验证记录](docs/VALIDATION.md)。
@@ -229,7 +253,7 @@ flashvsr_external:
 ### 关键参数
 
 - `mode=turbo/base/v1`：在 Loader 选择，切换模式会重新加载对应权重。
-- `scale`：当 height/width 都为 0 时使用；结果向上对齐到 128。例：480×270 输入、4×，得到 1920×1152。
+- `scale`：**默认 1×，从低内存开始**；当 height/width 都为 0 时使用，同时乘宽高，结果向上对齐到 128。2× / 4× 分别约为 4 / 16 倍像素；例：480×270 输入、1× 得到 512×384，4× 得到 1920×1152。
 - `height/width`：同时设置，覆盖 scale；必须均为 128 的正整数倍。1080 不合法，可用 1024 或 1152。预处理沿用官方中心裁剪 + bicubic，比例变化会裁掉边缘。
 - `temporal_compression=4/2/1`：默认 4；较大运动可试 2/1，耗时增加。保持输入 FPS 和帧数，不是插帧。
 - `tiled`：`auto` 按显存策略；`enabled` 使用手动 tile_size/overlap；`disabled` 请求完整空间推理。
@@ -250,7 +274,7 @@ flashvsr_external:
 |---|---|---|
 | [image_batch.json](example_workflows/image_batch.json) | 单图或 IMAGE 批次 → 超分 → SaveImage | ComfyUI 内置节点 + 本插件 |
 | [native_video.json](example_workflows/native_video.json) | 视频 → 超分 → 保存视频，透传音频/FPS | 提供原生 VIDEO API 的 ComfyUI + 本插件 |
-| [streaming_video.json](example_workflows/streaming_video.json) | 视频 → 流式超分 → SaveVideo，默认 2×，无需整段 IMAGE 输出 | 原生 VIDEO API；Loader decoder=tiny |
+| [streaming_video.json](example_workflows/streaming_video.json) | 视频 → 流式超分 → SaveVideo，默认 1×，无需整段 IMAGE 输出 | 原生 VIDEO API；Loader decoder=tiny |
 | [pipe_reuse.json](example_workflows/pipe_reuse.json) | 一个 Loader 供两个 Upscale 复用 | ComfyUI 内置节点 + 本插件 |
 | [image_batch_api.json](example_workflows/image_batch_api.json) | IMAGE 路径的 `/prompt` 请求体 | API 示例，修改输入文件名后使用 |
 | [native_video_api.json](example_workflows/native_video_api.json) | VIDEO 路径的 `/prompt` 请求体 | 原生 VIDEO API；修改输入文件名后使用 |
@@ -258,7 +282,7 @@ flashvsr_external:
 
 #### 长视频 / 系统内存不足：Streaming VIDEO
 
-拖入 `streaming_video.json`，选择视频，设置 Loader `decoder=tiny`，将 Streaming 节点的 `video` 输出直接接 `SaveVideo`。该路径沿用官方 `TemporalVideoStream → StreamRunner(segment_writer=...)`，每个空间 tile 在整段视频中保留连续的 KV/decoder 状态。它不把视频切成彼此独立的推理段，也不创建完整输出 IMAGE 批次。`decode_every` 至少为 4，VAE decoder 暂不支持此文件输出路径。
+拖入 `streaming_video.json`，选择视频，保留 `scale=1.0`、`height=width=0`，设置 Loader `decoder=tiny`，将 Streaming 节点的 `video` 输出直接接 `SaveVideo`。该路径沿用官方 `TemporalVideoStream → StreamRunner(segment_writer=...)`，每个空间 tile 在整段视频中保留连续的 KV/decoder 状态。它不把视频切成彼此独立的推理段，也不创建完整输出 IMAGE 批次。`decode_every` 至少为 4，VAE decoder 暂不支持此文件输出路径。
 
 输入 VIDEO 先通过 ComfyUI 的 `save_to()` 准备临时文件，文件型 VIDEO 的裁剪/时间截取由原生 API 处理。每个 tile 的输出片段以 **RGB8** 暂存磁盘，再逐帧按重叠权重融合，编码成 H.264/yuv420p；这会增加一次 8 位量化，与 float32 IMAGE 路径存在细微差异。`crf=18` 为默认输出质量，`keep_audio=true` 保留来源音轨；不兼容 MP4 的音轨转 AAC。音频较短时仍保留全部视频帧。
 
@@ -380,7 +404,7 @@ Turbo/Base and shared decoders come from [ruchangyao/FlashVSR_plus](https://hugg
 
 1. Drag [native_video.json](example_workflows/native_video.json) into ComfyUI and replace `example.mp4` with your video. For an IMAGE batch or older ComfyUI, start with [image_batch.json](example_workflows/image_batch.json).
 2. Set the Loader to `turbo / auto / auto / auto / tiny` (mode/profile/backend/offload/decoder) and enable automatic download, or install the three files above manually.
-3. Start with a short clip, `scale=2`, `height=width=0`, `tiled=auto`, temporal compression 4, decode interval 4 and OOM recovery enabled.
+3. Start with a short clip and the lower-memory defaults: `scale=1.0`, `height=width=0`, `tiled=auto`, temporal compression 4, decode interval 4 and OOM recovery enabled. Check available resources before increasing the scale or clip length.
 4. The native VIDEO example connects Upscale's `images`, `audio` and `fps` to Create VIDEO, then SaveVideo. In the IMAGE example, replace LoadImage with your video frame loader as needed; connect audio separately and set both Upscale and your video saver to the actual loaded FPS. IMAGE tensors do not carry FPS metadata.
 5. Reuse the Loader's PIPE for additional clips. Use [pipe_reuse.json](example_workflows/pipe_reuse.json) as an example. Keep Loader settings unchanged to allow ComfyUI to reuse its cached object.
 
@@ -388,12 +412,22 @@ Connect exactly one **IMAGE batch** or native **VIDEO** to Upscale. Outputs are 
 
 Use a single Loader for multiple Upscale nodes or queue requests. Weights stay available in host RAM while offload releases CUDA allocations between requests. Every new clip starts fresh temporal state. After explicitly unloading a PIPE, change the Loader's `reload_token` to load again.
 
+### Scale and memory: start at 1x
+
+**All UI/API examples, both upscale nodes and the Python PIPE default to `scale=1.0`.** The Turbo/Base/V1 preset and automatic VRAM policy do not change your requested scale. Set **both `height=0` and `width=0`** for scale to take effect; explicit dimensions override it.
+
+Scale multiplies width and height, so pixels and complete float32 IMAGE output RAM grow approximately with **scale squared**, and linearly with frame count. A 1472×2688 input with 360 frames needs **16.61 GiB at 1×** (1536×2688 after alignment), **63.68 GiB at 2×**, or **254.71 GiB at 4×** just for the output IMAGE tensor. Input frames, model weights and caches need additional memory. These are calculated host RAM figures, not measured VRAM or performance claims.
+
+Try 1× first, or 0.5× for a large input, then increase to 1.5× / 2× / 4× after a short test. 1× still runs the model and rounds dimensions upward to multiples of 128; it does not guarantee enough memory for every clip. If another node has already enlarged your input 2×, another 2× here produces approximately 4× dimensions relative to the original. Prefer **Streaming VIDEO → SaveVideo** for long clips; its temporary disk usage still grows with frame count, target area and overlap. GPU tiling/offload cannot remove the RAM required for a complete IMAGE batch.
+
+Updating the plugin does not reset widgets in existing workflows. Restart ComfyUI to load the new node definitions, then import the new examples or manually set `scale=1.0`, `height=width=0` and save. When editing JSON, synchronize positional `widgets_values` and `widgets_values_named`, then re-import the file.
+
 ### Important controls
 
 | Parameter | Behavior |
 |---|---|
 | `mode` | Select Turbo, Base or V1 in the Loader; loads that preset's weights. |
-| `scale`, `height`, `width` | Leave dimensions at 0 to use scale with upward 128 alignment; otherwise set both dimensions to positive multiples of 128. |
+| `scale`, `height`, `width` | Default scale 1×. Leave dimensions at 0 to use scale with upward 128 alignment; 2× / 4× mean about 4× / 16× pixels. Otherwise set both dimensions to positive multiples of 128, overriding scale. |
 | `temporal_compression` | 4/2/1, default 4. Lower values may help motion and cost more computation. Output frame count/FPS are preserved. |
 | `tiled`, `tile_size`, `tile_overlap` | `auto` uses policy values; `enabled` uses manual values in output pixels. Sizes align to 128, tile ≥256, overlap < tile. |
 | `offload` | `model` releases weights between stages/requests; `block` also moves individual DiT blocks. `auto` follows the profile. |
@@ -413,7 +447,7 @@ CUDA OOM recovery restarts the complete request with smaller tiles and stronger 
 
 Drag `image_batch.json`, `native_video.json`, or `pipe_reuse.json` into ComfyUI and select your own input files. Files ending in `_api.json` are `/prompt` API examples. These IMAGE-returning workflows pass audio/FPS through to Create VIDEO and SaveVideo and need CPU memory for the complete IMAGE output. Independent segments reuse weights but reset temporal history.
 
-For long clips, use **`streaming_video.json`: LoadVideo → Upscale VIDEO (Streaming) → SaveVideo**. It requires `decoder=tiny`, numeric `decode_every>=4`, and defaults to 2×. The official runner keeps continuous KV/decoder state across the entire timeline of each spatial tile. Its segment writer spools RGB8 tiles to disk, then composites/encodes one frame at a time to H.264/yuv420p. No complete IMAGE output is allocated; the 8-bit tile spool adds quantization compared with float32 IMAGE. `keep_audio=true` copies compatible audio or converts it to AAC; a short audio track never truncates video. File-backed native input is prepared through ComfyUI `save_to()`, including its trim/crop handling.
+For long clips, use **`streaming_video.json`: LoadVideo → Upscale VIDEO (Streaming) → SaveVideo**. It requires `decoder=tiny`, numeric `decode_every>=4`, and defaults to **1×** with `height=width=0`. The official runner keeps continuous KV/decoder state across the entire timeline of each spatial tile. Its segment writer spools RGB8 tiles to disk, then composites/encodes one frame at a time to H.264/yuv420p. No complete IMAGE output is allocated; the 8-bit tile spool adds quantization compared with float32 IMAGE. `keep_audio=true` copies compatible audio or converts it to AAC; a short audio track never truncates video. File-backed native input is prepared through ComfyUI `save_to()`, including its trim/crop handling.
 
 The node checks temporary disk space before inference and removes input/tile spools on success, failure and cancellation. The returned VIDEO is a temporary file: connect SaveVideo for persistent output. Set ComfyUI `--temp-directory` to a larger disk if needed. Disk usage grows with frame count, output area and tile overlap, even though output RAM does not grow with the full timeline. The standard IMAGE node now rejects a minimum output allocation exceeding 75% of available RAM, reporting the requested dimensions/frame count. Spatial GPU tiling cannot remove the RAM required by a complete IMAGE batch.
 

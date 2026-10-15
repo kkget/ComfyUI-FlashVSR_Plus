@@ -166,7 +166,7 @@
         "Node name for S&R": "FlashVSRPlusUpscale"
       },
       "widgets_values": [
-        4.0,
+        1.0,
         0,
         0,
         4,
@@ -186,7 +186,7 @@
         24.0
       ],
       "widgets_values_named": {
-        "scale": 4.0,
+        "scale": 1.0,
         "height": 0,
         "width": 0,
         "temporal_compression": 4,
@@ -343,7 +343,7 @@
         "Node name for S&R": "FlashVSRPlusUpscale"
       },
       "widgets_values": [
-        4.0,
+        1.0,
         0,
         0,
         4,
@@ -363,7 +363,7 @@
         24.0
       ],
       "widgets_values_named": {
-        "scale": 4.0,
+        "scale": 1.0,
         "height": 0,
         "width": 0,
         "temporal_compression": 4,
