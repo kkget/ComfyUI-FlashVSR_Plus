@@ -206,6 +206,8 @@ flashvsr_external:
 
 **手动安装 / 离线运行：** 在 Loader 设置 `model_directory=C:\Comfyui\models\FlashVSR_Plus`（替换为实际路径）、`auto_download=false`。Turbo 使用 `mode=turbo`、`decoder=tiny`，只需上面的三个权重。缺少文件会立即显示已检查路径，不会尝试联网。如果已有模型却仍看到 `HEAD .../turbo/dit.safetensors` 重试，检查本次实际运行的 Loader 参数和日志中的 `FlashVSR+ model search directories` / `using model`；更新前的旧版插件只查第一个注册目录，需更新并重启 ComfyUI，或直接显式填写正确目录。
 
+新版 ComfyUI 保存的工作流可能同时包含 `widgets_values` 和 `widgets_values_named`，并按命名参数恢复控件。用脚本修改 JSON 时需要同步更新这两处，避免离线开关和模型路径恢复旧值。修改磁盘上的 JSON 后应重新导入工作流；已经打开的画布不会自动采用文件修改。直接在画布上修改 Loader 并保存也可同步这些参数。
+
 ## 节点与使用
 
 | 节点 | 用途 |
@@ -352,6 +354,8 @@ ComfyUI/models/FlashVSR_Plus/TCDecoder.ckpt
 For example, if ComfyUI is installed at `C:\Comfyui`, the first file belongs at `C:\Comfyui\models\FlashVSR_Plus\turbo\dit.safetensors`. Portable uses `ComfyUI_windows_portable\ComfyUI\models\FlashVSR_Plus\`. Set `auto_download=false` after manual installation. Leave `model_directory` empty for the default root, or point it at the directory containing `turbo/`, not at the `turbo/` subdirectory itself. The extra-model-path YAML example above can move all weights to another disk.
 
 With an empty `model_directory`, the loader searches **all** registered `FlashVSR_Plus` directories plus the current ComfyUI `models/FlashVSR_Plus/` folder before downloading each missing file to the first directory. An empty Desktop shared folder cannot hide weights in another configured directory. An explicit `model_directory` restricts the search to that root. Complete local weights never trigger Hub requests, including HEAD, even with `auto_download=true`. For strict offline use, set `auto_download=false`; missing files immediately report every searched path. The log lists the search directories and the actual files selected.
+
+Recent ComfyUI workflow JSON may contain both `widgets_values` and `widgets_values_named`, with named values used to restore controls. When editing JSON programmatically, update both representations so the offline switch and model root agree. Re-import the file after editing it; an already-open canvas does not reload changes from disk. Editing the Loader controls on the canvas and saving also keeps these values synchronized.
 
 Turbo/Base and shared decoders come from [ruchangyao/FlashVSR_plus](https://huggingface.co/ruchangyao/FlashVSR_plus/tree/main). V1 comes from [JunhaoZhuang/FlashVSR-v1.1](https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1/tree/main): map `diffusion_pytorch_model_streaming_dmd.safetensors` to `v1/dit.safetensors`, and keep `v1/LQ_proj_in.ckpt` in its original format. The original V1 DiT filename is also accepted inside `v1/`. Never rename a pickle checkpoint to `.safetensors`. The fixed prompt is included and copied automatically. `Wan2.1_VAE.pth` is needed only for `decoder=vae`; the default official path uses `TCDecoder.ckpt`. Base/V1 are optional and not needed for Turbo.
 
