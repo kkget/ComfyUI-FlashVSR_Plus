@@ -30,8 +30,11 @@ def definitions(cls,video=False):
     return widgets,inputs
 
 
-def custom(node_id,cls,x,y,video=False):
+def custom(node_id,cls,x,y,video=False,**overrides):
     widgets,inputs = definitions(cls,video)
+    if not overrides.keys() <= widgets.keys():
+        raise ValueError("Workflow overrides must name existing widgets")
+    widgets.update(overrides)
     values = []
     named = dict(widgets)
     for name,value in widgets.items():
@@ -143,14 +146,21 @@ def main():
     connect(reuse,2,0,6,"pipe")
     connect(reuse,5,0,6,"images")
     connect(reuse,6,0,7,"images")
+    balanced = copy.deepcopy(streaming)
+    balanced["nodes"][1] = custom(2,nodes.FlashVSRPlusLoader,0,240,profile="balanced")
+    # Keep existing links and port metadata from the auto example.
+    balanced["nodes"][1]["outputs"] = copy.deepcopy(streaming["nodes"][1]["outputs"])
+    balanced_api = copy.deepcopy(streaming_api)
+    balanced_api["2"]["inputs"]["profile"] = "balanced"
     for name,data in (("image_batch",image),("native_video",video),("pipe_reuse",reuse),
                       ("streaming_video",streaming),("image_batch_api",image_api),
-                      ("native_video_api",video_api),("streaming_video_api",streaming_api)):
+                      ("native_video_api",video_api),("streaming_video_api",streaming_api),
+                      ("streaming_video_balanced",balanced),("streaming_video_balanced_api",balanced_api)):
         if "nodes" in data:
             data["last_node_id"] = max(n["id"] for n in data["nodes"])
         (directory / (name+".json")).write_text(json.dumps(data,indent=2,ensure_ascii=False)+"\n",
                                               encoding="utf-8", newline="\n")
-    print("Generated 4 UI workflows and 3 API prompts.")
+    print("Generated 5 UI workflows and 4 API prompts.")
 
 
 if __name__ == "__main__":

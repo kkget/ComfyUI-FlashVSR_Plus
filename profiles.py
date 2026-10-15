@@ -31,21 +31,28 @@ class MemoryProfile:
 
 
 def choose_profile(total_gib: float, free_gib: float, backend: str, profile: str = "auto") -> MemoryProfile:
-    if profile not in {"auto", "official", "low_vram"}:
+    if profile not in {"auto", "official", "balanced", "low_vram"}:
         raise ValueError(f"Invalid profile: {profile}")
     # A nominal 24 GB GPU may report 23.7–23.9 GiB, particularly under Windows/WDDM.
     large = total_gib >= 23.0
     enough_free = free_gib >= 18.0
-    name = ("official" if large and enough_free else "low_vram") if profile == "auto" else profile
+    name = ("official" if large and enough_free else
+            "balanced" if total_gib >= 15 and free_gib >= 12 else "low_vram") if profile == "auto" else profile
     low = name == "low_vram"
+    balanced = name == "balanced"
+    resident = balanced and free_gib >= 12
     tile = 512 if free_gib >= 8 else (384 if free_gib >= 5 else 256)
+    if resident and free_gib >= 16:
+        tile = 768
     if backend == "sdpa":
         tile = min(tile, 384)  # SDPA materializes the sparse mask.
     reason = (f"{total_gib:.2f} GiB total, {free_gib:.2f} GiB free; "
               + ("automatic capacity/free-memory policy" if profile == "auto" else "manual override"))
-    return MemoryProfile(name, total_gib, free_gib, backend, low, tile, 128,
-                         "block" if low else "model", "always" if low else "auto",
-                         4, "serial" if low else "auto", 8192 if low else 32768, reason)
+    conservative = low or (balanced and not resident)
+    return MemoryProfile(name, total_gib, free_gib, backend, low or balanced, tile, 128,
+                         "resident" if resident else "block" if conservative else "model",
+                         "always" if conservative else "auto", 4,
+                         "serial" if conservative else "auto", 8192 if conservative else 32768, reason)
 
 
 def probe_backend(name: str, device: torch.device):

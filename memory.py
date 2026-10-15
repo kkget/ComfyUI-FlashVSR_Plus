@@ -3,8 +3,41 @@ from __future__ import annotations
 
 import functools
 import types
+from contextlib import contextmanager, ExitStack
 
 import torch
+
+
+@contextmanager
+def keep_models_resident(bundle):
+    """Skip upstream's CPU weight moves only within one serialized request.
+
+    The official runner still manages KV/LQ/decoder state unchanged. Only the
+    DiT and decoder *weights* stay on CUDA across incremental decode segments.
+    Restore per-instance methods before cleanup/OOM recovery; never patch a
+    class or upstream module global. Release between requests remains possible.
+    """
+    with ExitStack() as cleanup:
+        for module in (bundle.denoiser, bundle.decoder.module):
+            original = module.to
+            had_override = "to" in module.__dict__
+            previous = module.__dict__.get("to")
+
+            def restore(module=module, had_override=had_override, previous=previous):
+                if had_override:
+                    module.to = previous
+                else:
+                    del module.to
+
+            def move(module, *args, _original=original, **kwargs):
+                target = kwargs.get("device", args[0] if args else None)
+                if isinstance(target, (str, torch.device)) and torch.device(target).type == "cpu":
+                    return module
+                return _original(*args, **kwargs)
+
+            module.to = types.MethodType(move, module)
+            cleanup.callback(restore)
+        yield
 
 
 def ensure_cpu_output_fits(frames, height, width):

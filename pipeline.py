@@ -5,11 +5,13 @@ import gc
 import json
 import logging
 import threading
+import time
+from contextlib import nullcontext
 
 import torch
 
 from .frames import iter_prepared, target_size
-from .memory import ensure_cpu_output_fits, install_block_offload, install_decoder_offload, install_interrupt_checks, release_bundle
+from .memory import ensure_cpu_output_fits, install_block_offload, install_decoder_offload, install_interrupt_checks, keep_models_resident, release_bundle
 from .profiles import choose_profile, resolve_backend
 from .tiling import blend_mask, tile_grid
 
@@ -68,7 +70,7 @@ class FlashVSRPlusPipe:
             release_bundle(self.pipeline.bundle)
 
     def _activate_offload(self, mode):
-        if mode not in {"disabled", "model", "block"}:
+        if mode not in {"disabled", "resident", "model", "block"}:
             raise ValueError(f"Unknown offload mode: {mode}")
         # Once installed, the adapters are used for every subsequent request.
         # Automatic profiles only become more conservative during a PIPE's life.
@@ -128,9 +130,18 @@ class FlashVSRPlusPipe:
             stream.close()
 
     def _run_once(self, images, height, width, tiles, overlap, fps, progress, video_sink=None):
+        # Upstream always moves DiT weights to CPU at every decode segment.
+        # Resident mode suppresses just those weight moves, not temporal state
+        # handling or model math. The context exits before any retry/cleanup.
+        resident = self._active_offload in {"resident", "disabled"}
+        context = keep_models_resident(self.pipeline.bundle) if resident else nullcontext()
+        with context:
+            return self._run_once_residency(images, height, width, tiles, overlap, fps, progress, video_sink)
+
+    def _run_once_residency(self, images, height, width, tiles, overlap, fps, progress, video_sink=None):
         bundle = self.pipeline.bundle
         bundle.denoiser.to(self.device)
-        if self._active_offload == "disabled":
+        if self._active_offload in {"disabled", "resident"}:
             bundle.decoder.module.to(self.device)
         if video_sink is not None:
             return video_sink.render(self, images, height, width, tiles, overlap, fps, progress)
@@ -219,10 +230,14 @@ class FlashVSRPlusPipe:
                 tile_grid(height, width, size, overlap)  # validate before allocating
             attempts = []
             succeeded = False
+            started = time.perf_counter()
             torch.cuda.reset_peak_memory_stats(self.device)
             try:
                 for attempt in range(3):
                     tiles = tile_grid(height, width, size, overlap) if use_tiles else [(0, 0, height, width)]
+                    progress(f"Execution: {self.mode}, {profile.name}, {self.backend}, "
+                             f"offload={self._active_offload}, {len(tiles)} spatial tiles, "
+                             f"decode_every={config.decoder.decode_every}")
                     exhausted = False
                     try:
                         args = (images, height, width, tiles, overlap if use_tiles else 0, fps, progress)
@@ -234,6 +249,8 @@ class FlashVSRPlusPipe:
                                          "temporal_compression": temporal_compression, "seed": int(seed),
                                          "height": height, "width": width, "fps": fps,
                                          "oom_retries": attempts, "color_fix": color_fix,
+                                         "elapsed_seconds": time.perf_counter() - started,
+                                         "dit_resident_during_decode": self._active_offload in {"resident", "disabled"},
                                          "peak_allocated_gib": torch.cuda.max_memory_allocated(self.device) / 2**30})
                         succeeded = True
                         return output, json.dumps(metadata, ensure_ascii=False, indent=2)

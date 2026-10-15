@@ -19,9 +19,13 @@ class FlashVSRPlusLoader:
     def INPUT_TYPES(cls):
         return {"required": {
             "mode": (["turbo", "base", "v1"], {"default": "turbo"}),
-            "profile": (["auto", "official", "low_vram"], {"default": "auto"}),
+            "profile": (["auto", "official", "balanced", "low_vram"], {"default": "auto",
+                         "tooltip": "balanced: larger tiles and resident weights when VRAM permits; "
+                         "low_vram: smallest memory use, slower CPU/GPU transfers."}),
             "attn_backend": (["auto", "block_sparse", "triton_block_sparse", "sdpa"],),
-            "offload": (["auto", "model", "block", "disabled"],),
+            "offload": (["auto", "model", "block", "disabled", "resident"], {"tooltip":
+                "resident: keep weights on GPU during a request, release afterward. "
+                "block saves the most VRAM but transfers each layer for every temporal chunk."}),
             "decoder": (["tiny", "vae"], {"default": "tiny"}),
             "auto_download": ("BOOLEAN", {"default": True,
                                          "tooltip": "Download missing files only. False: strictly local, no network."}),
@@ -201,7 +205,7 @@ class FlashVSRPlusUnload:
 class FlashVSRPlusDiagnostics:
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"profile": (["auto", "official", "low_vram"],),
+        return {"required": {"profile": (["auto", "official", "balanced", "low_vram"],),
                              "attn_backend": (["auto", "block_sparse", "triton_block_sparse", "sdpa"],)}}
 
     RETURN_TYPES = ("STRING",)

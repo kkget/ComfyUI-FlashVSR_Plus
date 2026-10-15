@@ -12,12 +12,12 @@ from flashvsr_plus_plugin.profiles import choose_profile
 from flashvsr_plus_plugin.tiling import blend_mask, tile_grid
 
 
-@pytest.mark.parametrize("total,free,expected", [(23.89,22,"official"), (24,12,"low_vram"),
-                                               (16,15,"low_vram"), (32,27,"official")])
+@pytest.mark.parametrize("total,free,expected", [(23.89,22,"official"), (24,12,"balanced"),
+                                               (16,15,"balanced"), (32,27,"official")])
 def test_auto_vram_policy(total, free, expected):
     profile = choose_profile(total, free, "triton_block_sparse")
     assert profile.name == expected
-    assert profile.tiled == (expected == "low_vram")
+    assert profile.tiled == (expected != "official")
 
 
 def test_manual_profile_and_sdpa_budget():

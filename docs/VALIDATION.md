@@ -50,8 +50,8 @@ The subsequent file-backed VIDEO implementation passed **156 tests including all
 
 - All six current node classes import and expose their schemas against the installed core; the original five were also checked using the actual hyphenated plugin module name.
 - Native `VideoFromComponents` round-trip preserves the original IMAGE tensor, AUDIO object and source FPS.
-- All four UI JSON workflows have valid link indices/types and matching named/positional plugin widget values.
-- All three API JSON examples provide all required plugin inputs.
+- All five UI JSON workflows have valid link indices/types and matching named/positional plugin widget values, including the optional balanced Streaming example.
+- All four API JSON examples provide all required plugin inputs.
 - No global `models`, `inference` or `model_io` package aliases are introduced.
 - Vendored Python file hashes and the bundled official context tensor match `vendor/manifest.json`.
 - Python compilation of plugin/source files succeeds.
@@ -64,9 +64,26 @@ python scripts/check_install.py --comfyui-path /path/to/ComfyUI/core
 
 Use the Python interpreter belonging to ComfyUI. `--comfyui-path` points to the source directory containing `comfy/` and `comfy_api/`, which can differ from the models/custom_nodes user directory in Desktop installations.
 
+## Speed and residency checks
+
+The speed update adds CPU coverage for balanced-policy thresholds, explicit low-VRAM overrides, SDPA tile bounds, per-instance transfer-method restoration on exceptions, and absence of class/global patches. A real CUDA reduced-model test compares model-stage offload with resident weights, verifies CPU transfers occur only at request cleanup, and injects an OOM inside resident execution to check method restoration, block-offload restart, output equivalence and CPU cleanup. Existing official timeline/file-output tests remain applicable.
+
+Final validation of this update: **163 tests passed, including all 6 real CUDA tests**. Five UI graphs and four API examples were separately checked for input/link consistency, matching positional/named widgets and the retained 1x default. No live ComfyUI queue or complete user workflow was executed.
+
+`scripts/benchmark_speed.py` ran against the **complete official Turbo DiT, LQ projection and TinyDecoder weights**, local-only, on this RTX 5090 Laptop. Synthetic seeded RGB float32 IMAGE input, BF16 execution, bundled Triton, temporal compression 4, decode interval 4, one untiled stream and the same TinyDecoder auto setting were used for each comparison. One model-stage-offload warmup was excluded; each measured time includes request cleanup but excludes model loading and file encoding. Each setting has one measured sample, not a statistical benchmark.
+
+| Input | Model-stage offload | Resident weights | Peak allocated, model / resident | Output max absolute difference |
+|---|---|---|---|---|
+| 17 frames, 512×512 | 3.6065s | 2.6968s | 3.8250 / 6.9861GiB | 0 |
+| 17 frames, 768×768 | 6.5213s | 4.6754s | 8.4368 / 11.6163GiB | 0 |
+
+Separate block-offload runs with the same auto decoder took 3.0017s and 5.1573s respectively, with max output difference 0. These isolate weight transfers; the older low-VRAM profile also forces serial decoder/KV offload and is not identical to this block-only comparison. Residency improves throughput over model-stage offload by about 34% and 39% in these two samples, at a higher VRAM cost. Changing spatial tile size is a separate quality/performance tradeoff and was not claimed to preserve output elements.
+
+A separate **17-frame synthetic IMAGE input, 1536×2688 output** ran successfully with full Turbo weights, `official`, `offload=model`, untiled, decoder auto (selected serial), KV auto and no OOM retries. It returned exactly `[17,2688,1536,3]`, took **31.8899s including cleanup** and peaked at **12.8780GiB PyTorch allocated**. This first run at that shape had no matching-shape warmup and excluded model loading and file codecs; it is not directly comparable with the warmed square-tile tests, nor a measurement of 360-frame execution. No 360-frame/long VIDEO throughput benchmark was run.
+
 ## Limits of this validation
 
-The complete Turbo DiT, LQ projection and TinyDecoder checkpoints have been downloaded and verified against their published SHA256 hashes. Local path resolution was verified without Hub access. A **single synthetic 128x128 frame** was subsequently run through the complete official Turbo weights and both actual Loader/Streaming VIDEO node methods, using `low_vram`, block offload and bundled Triton. Native `VideoFromFile` input was normalized to temporary Matroska and the encoded output verified as exactly one 128x128 frame. The PIPE was explicitly closed afterward. This verifies full-weight execution at that tiny size only; no restoration-quality equivalence, full-resolution 1080p/2K memory figure, 360-frame execution or speed benchmark is claimed. Wan VAE tiled decode was not executed with its full pretrained checkpoint. Real BSA execution was unavailable; bundled official Triton was used.
+The complete Turbo DiT, LQ projection and TinyDecoder checkpoints have been downloaded and verified against their published SHA256 hashes. Local path resolution was verified without Hub access. Initial validation ran a **single synthetic 128x128 frame** through the complete official Turbo weights and both actual Loader/Streaming VIDEO node methods, using `low_vram`, block offload and bundled Triton. Native `VideoFromFile` input was normalized to temporary Matroska and the encoded output verified as exactly one 128x128 frame. The PIPE was explicitly closed afterward. Subsequent short full-weight IMAGE timing/residency checks are documented above; no restoration-quality equivalence or full-length VIDEO speed/memory guarantee is claimed. Wan VAE tiled decode was not executed with its full pretrained checkpoint. Real BSA execution was unavailable; bundled official Triton was used.
 
 The automatic memory policies and OOM restart were tested functionally; the smaller-GPU policies were exercised using controlled capacity values and a synthetic OOM, not physical 8/12/16GB cards. Tests of reduced models verify execution/numerics/state handling, not pretrained quality or full-model peak VRAM.
 

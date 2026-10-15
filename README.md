@@ -34,27 +34,45 @@
 
 1. 按下方命令克隆到 `ComfyUI/custom_nodes/ComfyUI-FlashVSR_Plus`，用 **ComfyUI 自己的 Python** 安装依赖，然后重启 ComfyUI。
 2. 视频优先将 [streaming_video.json](example_workflows/streaming_video.json) 拖入画布并选择自己的视频；需要 IMAGE 帧输出时使用 [native_video.json](example_workflows/native_video.json)。旧版 ComfyUI 或 VHS 用户使用 [image_batch.json](example_workflows/image_batch.json)。
-3. Loader 先用 `mode=turbo`、`profile=auto`、`attn_backend=auto`、`offload=auto`、`decoder=tiny`。`auto_download=true` 会下载所需模型；手动安装只需下表中 **Turbo 的两个文件 + TCDecoder.ckpt**。
+3. Loader 先用 `mode=turbo`、`attn_backend=auto`、`offload=auto`、`decoder=tiny`。默认 `profile=auto`，24GB 级显卡优先完整空间推理；显存压力较大时可用新增的 balanced 工作流。`auto_download=true` 会下载所需模型；手动安装只需下表中 **Turbo 的两个文件 + TCDecoder.ckpt**。
 4. Upscale 先用短视频测试，保留低内存起步的默认值 `scale=1.0`、`height=0`、`width=0`，以及 `tiled=auto`、`temporal_compression=4`、`cache_offload=auto`、`decode_every=4`、`oom_retry=true`。确认资源充足后再增加片长与尺寸；倍率说明见上方重点提示。
 5. Streaming 节点的 `video` 直接接 `SaveVideo`。普通 IMAGE 输出路径将 `images/audio/fps` 接到 `FlashVSR+ Create VIDEO`，再接 `SaveVideo`。IMAGE/VHS 路径的接法见工作流章节。
 
-**模型目录是 `ComfyUI/models/FlashVSR_Plus/`，不是插件目录。** 如果你的 ComfyUI 位于 `C:\Comfyui`，模型就放在 `C:\Comfyui\models\FlashVSR_Plus\`。完整预训练模型的画质、1080p/2K 显存与速度尚未在本项目中实测，详见[验证记录](docs/VALIDATION.md)。
+**模型目录是 `ComfyUI/models/FlashVSR_Plus/`，不是插件目录。** 如果你的 ComfyUI 位于 `C:\Comfyui`，模型就放在 `C:\Comfyui\models\FlashVSR_Plus\`。已有完整权重的短输入执行与速度测试，尚未验证整段长视频的画质、峰值显存和速度，详见[验证记录](docs/VALIDATION.md)。
 
 ## 中文：先了解默认行为
 
-这是一个插件内的两档执行策略，共用官方代码与权重。`profile=auto` 在加载和每次推理时检测当前 CUDA 设备的总显存与空闲显存。24GB 级设备按 **总容量 ≥23GiB** 识别，兼容 Windows 上常见的 23.9GiB 上报值。
+同一个插件提供完整空间、均衡与低显存策略，共用官方代码与权重。`profile=auto` 在加载和每次推理时检测当前 CUDA 设备的总显存与空闲显存。24GB 级设备按 **总容量 ≥23GiB** 识别，兼容 Windows 上常见的 23.9GiB 上报值。
 
 | 情况 | 自动策略 | 空间处理 | 权重卸载 / 解码 |
 |---|---|---|---|
 | 24GB 级或以上、空闲 ≥18GiB，稀疏后端可用 | `official` | 不做 DiT 空间分块 | 解码时卸载 DiT，模型阶段卸载 decoder；KV auto |
-| 小于 24GB 级，或空闲 <18GiB | `low_vram` | 256 / 384 / 512 像素重叠分块 | DiT block offload、KV always、串行 TinyDecoder |
+| 不满足上一行，但总容量 ≥15GiB、空闲 ≥12GiB | `balanced` | 512 像素分块；空闲 ≥16GiB 时用 768 | 任务内权重驻留、任务结束卸载；KV / TinyDecoder auto |
+| 其余较小或繁忙显卡 | `low_vram` | 256 / 384 / 512 像素重叠分块 | DiT block offload、KV always、串行 TinyDecoder |
 | 只有 SDPA，且目标面积 >512×512 | `low_vram` | 最多 384 像素分块 | 避免 SDPA 大尺寸稀疏掩码的内存开销 |
 
-`profile=official/low_vram` 可以手动指定策略；`tiled=enabled/disabled` 可以覆盖空间分块决定。`tiled=auto` 使用自动 tile 参数，忽略手动 `tile_size/tile_overlap`。`offload=auto` 使用策略默认值。
+`profile=official/balanced/low_vram` 可以手动指定策略；`tiled=enabled/disabled` 可以覆盖空间分块决定。`tiled=auto` 使用自动 tile 参数，忽略手动 `tile_size/tile_overlap`。`offload=auto` 使用策略默认值。手动 `balanced` 在空闲不足 12GiB 时也会使用 block offload 和保守分块；显存仍不足时保留 OOM 重试。
 
 Turbo 严格保留官方 **Hybrid-B25**：第 0/6/12/18/24 层使用原始稀疏注意力，其余 25 层使用局部时空注意力。Base 与 V1 按官方配置关闭 Hybrid 替换。**RY-DMD 是训练/蒸馏方法，效果来自官方已训练权重，没有额外的推理开关。**
 
 空间 tiling 会限制跨 tile 的全局交互，因此与官方不分块结果存在画质差异。24GB 以下跑 1080p/2K 是本插件的优化目标，实际是否能运行取决于 GPU、其他进程、tile 大小和模式；没有固定显存或速度保证。
+
+### 生成速度慢：先检查卸载方式和分块数
+
+**低内存起步保留 `scale=1.0`，但不必在显存充足时强制 `offload=block`。** 逐层卸载每个时间块都要搬运 30 层权重，256/512 小 tile 也需要多次处理整段视频。`tiled=auto` 时，直接修改 `tile_size` 不生效，须改为 `tiled=enabled` 才使用手动值。
+
+24GB 级显卡先用 [streaming_video.json](example_workflows/streaming_video.json) 的 `turbo / auto / auto / auto / tiny`，优先整帧；显存压力较大时用 [streaming_video_balanced.json](example_workflows/streaming_video_balanced.json) 的 `turbo / balanced / auto / auto / tiny`，Upscale 保持 **1×、`tiled=auto`、`cache_offload=auto`、`decode_every=4`、`oom_retry=true`**。balanced 在空闲显存 ≥16GiB 时使用 768/128 分块及 `resident` 权重策略。例如 1536×2688 输出从 512/128 的 **28 个 tile** 减少到 768/128 的 **12 个 tile**；模型权重在整次请求中驻留 GPU，完成、报错或取消后卸载。原始注意力、时序缓存与解码计算保持官方实现。
+
+| 完整 Turbo 权重短测试 | `offload=model` | `offload=resident` | 驻留后的吞吐提升 |
+|---|---|---|---|
+| 17 帧、512×512、一个 tile | 3.61 秒 / 3.83GiB | 2.70 秒 / 6.99GiB | 约 34% |
+| 17 帧、768×768、一个 tile | 6.52 秒 / 8.44GiB | 4.68 秒 / 11.62GiB | 约 39% |
+
+测试环境：RTX 5090 Laptop 24GB、Torch 2.10、官方 Triton、BF16、固定输入/seed、相同 decoder auto；均预热后单次测量，时间包含任务结束清理，显存为 PyTorch peak allocated。两组对照输出逐元素一致。**这不是整段视频、包含文件编解码的计时或跨显卡速度保证。** 变更 tile 大小本身会改变可见空间上下文，不保证与旧 tile 输出逐元素一致。
+
+同一显卡还完成了 **17 帧、1536×2688 输出、完整 Turbo 权重、不分块**的合成输入测试：31.89 秒，PyTorch peak allocated **12.88GiB**，无 OOM 重试。这个单次测试未做相同尺寸的预热，也不包含模型加载与文件编解码，不能直接当作 360 帧视频耗时。显存允许时优先整帧可避免重复 tile 的上下文与推理工作；balanced 用于整帧不适合的任务。
+
+24GB+ 且显存充足时，也可使用 `profile=auto` 尝试官方不分块路径；查看 `info.tile_count`、`offload`、`dit_resident_during_decode`、`elapsed_seconds` 和 `oom_retries`。`elapsed_seconds` 统计推理尝试，未计入 Loader、原生视频输入准备及最终权重清理；上表使用外部计时。首次执行还包括模型加载与 Triton 编译，后续队列请复用同一个 PIPE。升级后重启并重新导入工作流；旧 PIPE 已安装 block 适配器时，须改变 Loader 参数或 `reload_token` 重新加载才能恢复更快策略。
 
 ## 文件结构
 
@@ -64,7 +82,7 @@ ComfyUI-FlashVSR_Plus/
 ├── nodes.py                    # Loader / Upscale / ToVideo / Unload / Diagnostics
 ├── pipeline.py                 # PIPE 生命周期、官方流式调用、OOM 重试
 ├── profiles.py                 # 显存策略、真实 CUDA 后端检查
-├── memory.py                   # DiT block / decoder offload
+├── memory.py                   # DiT block / decoder offload、任务内权重驻留
 ├── video_streaming.py          # 连续时序推理、磁盘 tile 暂存、逐帧编码
 ├── frames.py                   # IMAGE / VIDEO、官方 bicubic 预处理
 ├── tiling.py                   # 空间网格及重叠融合
@@ -83,12 +101,15 @@ ComfyUI-FlashVSR_Plus/
 │   ├── image_batch.json        # 可拖入的 ComfyUI 工作流
 │   ├── native_video.json       # LoadVideo → Upscale → VIDEO → SaveVideo
 │   ├── streaming_video.json    # LoadVideo → Streaming Upscale → SaveVideo
+│   ├── streaming_video_balanced.json # 分块 + 任务内权重驻留备选
 │   ├── pipe_reuse.json         # 一个 PIPE 供两次推理使用
 │   ├── image_batch_api.json    # /prompt API 格式
 │   ├── native_video_api.json
-│   └── streaming_video_api.json
+│   ├── streaming_video_api.json
+│   └── streaming_video_balanced_api.json
 ├── scripts/
 │   ├── check_install.py
+│   ├── benchmark_speed.py      # 本地完整权重短测试，不下载模型
 │   ├── make_workflows.py
 │   └── vendor_upstream.py
 ├── tests/
@@ -258,7 +279,7 @@ flashvsr_external:
 - `temporal_compression=4/2/1`：默认 4；较大运动可试 2/1，耗时增加。保持输入 FPS 和帧数，不是插帧。
 - `tiled`：`auto` 按显存策略；`enabled` 使用手动 tile_size/overlap；`disabled` 请求完整空间推理。
 - `tile_size/tile_overlap`：单位为目标输出像素，均按 128 对齐，tile ≥256、overlap < tile。分块覆盖 DiT、LQ projection 与当前 decoder，每个 tile 保留完整视频时序。
-- `offload=auto/model/block/disabled`：model 在模型阶段间与任务结束后卸载；block 进一步逐个 DiT block 搬运；disabled 尽量保留驻留，但官方增量 runner 仍会在解码阶段搬运 DiT。
+- `offload=auto/model/block/resident/disabled`：model 在解码阶段间与任务结束后卸载；block 逐个 DiT block 搬运、显存最低；**resident 在任务内保留权重，任务结束卸载，速度更快但显存更高**；disabled 还保留任务结束后的权重。后两者只避免权重搬运，不改变官方 KV/LQ/decoder 时序状态处理。
 - `cache_offload=auto/always/never`：控制官方原始稀疏层的 KV cache；与权重 offload 独立。CPU RAM/PCIe 流量会增加。
 - `decode_every=4`：每 4 个 latent 帧解码一次，限制输入预处理和 latent 缓冲；0 使用官方完整时间轴模式。TinyDecoder 推荐 4，VAE 路径固定完整时间轴。
 - `color_fix`：官方 wavelet 低频颜色修正，默认关闭；`color_correction_levels=5`。
@@ -274,11 +295,13 @@ flashvsr_external:
 |---|---|---|
 | [image_batch.json](example_workflows/image_batch.json) | 单图或 IMAGE 批次 → 超分 → SaveImage | ComfyUI 内置节点 + 本插件 |
 | [native_video.json](example_workflows/native_video.json) | 视频 → 超分 → 保存视频，透传音频/FPS | 提供原生 VIDEO API 的 ComfyUI + 本插件 |
-| [streaming_video.json](example_workflows/streaming_video.json) | 视频 → 流式超分 → SaveVideo，默认 1×，无需整段 IMAGE 输出 | 原生 VIDEO API；Loader decoder=tiny |
+| [streaming_video.json](example_workflows/streaming_video.json) | 视频 → 流式超分 → SaveVideo，默认 1× + auto，24GB 级优先整帧 | 原生 VIDEO API；Loader decoder=tiny |
+| [streaming_video_balanced.json](example_workflows/streaming_video_balanced.json) | 1× + balanced，较大分块与任务内权重驻留 | 原生 VIDEO API；Loader decoder=tiny |
 | [pipe_reuse.json](example_workflows/pipe_reuse.json) | 一个 Loader 供两个 Upscale 复用 | ComfyUI 内置节点 + 本插件 |
 | [image_batch_api.json](example_workflows/image_batch_api.json) | IMAGE 路径的 `/prompt` 请求体 | API 示例，修改输入文件名后使用 |
 | [native_video_api.json](example_workflows/native_video_api.json) | VIDEO 路径的 `/prompt` 请求体 | 原生 VIDEO API；修改输入文件名后使用 |
 | [streaming_video_api.json](example_workflows/streaming_video_api.json) | 流式 VIDEO 的 `/prompt` 请求体 | 原生 VIDEO API；修改输入文件名后使用 |
+| [streaming_video_balanced_api.json](example_workflows/streaming_video_balanced_api.json) | balanced 流式 VIDEO 的 `/prompt` 请求体 | 原生 VIDEO API；修改输入文件名后使用 |
 
 #### 长视频 / 系统内存不足：Streaming VIDEO
 
@@ -317,11 +340,12 @@ flashvsr_external:
 | 目标 | Loader | Upscale |
 |---|---|---|
 | 自动选择 | `turbo / auto / auto / auto / tiny`（mode/profile/backend/offload/decoder） | `tiled=auto`、`cache_offload=auto`、`decode_every=4` |
+| 均衡速度与显存（balanced 示例） | `turbo / balanced / auto / auto / tiny` | 1×、`tiled=auto`；显存足够时 768/128 + resident，否则缩小 tile / block offload |
 | 24GB+，优先完整空间推理 | `profile=auto`，安装可用的 Triton 或 BSA | 保持 `tiled=auto`，查看 `info` 确认是否实际分块 |
 | 显存紧张，优先易安装 | `profile=low_vram`、`offload=block`、`decoder=tiny`；无 Triton 可选 SDPA | `tiled=enabled`、`tile_size=256` 或 `384`、`tile_overlap=128`、`cache_offload=always` |
 | 必须禁止空间分块的对比测试 | `profile=official`，选可用的稀疏后端 | `tiled=disabled` 且 `oom_retry=false`；显存不足会报错 |
 
-两档策略内置于同一个插件，不需要装两个插件。自动选择会受**当前空闲显存**影响；24GB+ 显卡在被其他程序占用时也可能选择低显存策略。`info` 包含所选后端、策略、输出尺寸、tile 与重试信息，可连接文本查看节点或查看日志。
+上述策略内置于同一个插件。自动选择会受**当前空闲显存**影响；24GB+ 显卡在被其他程序占用时也可能选择均衡或低显存策略。`info` 包含所选后端、策略、输出尺寸、tile、推理耗时与重试信息，可连接文本查看节点或查看日志。
 
 **长视频的限制：** 普通 Upscale 的 IMAGE 输出仍需要完整 CPU 内存，原生 `VIDEO.get_components()` 也会解出完整帧集合。1920×1152 RGB float32 每帧约 25MiB，1000 帧仅最终输出就约 24.7GiB。插件会在输出最低内存需求超过当前可用 RAM 的 75% 时提前报出尺寸、帧数及估算，不会自动缩小结果。长视频保存为文件请使用上述 Streaming VIDEO；独立分段调用只复用权重，不延续时序状态。
 
@@ -337,6 +361,7 @@ flashvsr_external:
 | Triton 导入或 kernel 编译失败 | 使用匹配当前 Python/Torch/CUDA 的安装包，先运行 GPU / Backend Check；`auto` 会跳过失败后端，或显式选 `sdpa` + 小 tile。 |
 | `skipping block_sparse: No module named block_sparse_attn` | 自动后端选择的信息日志；插件会继续尝试官方内置 Triton，再尝试 SDPA。查看后面的 `selected attention backend`。已有可用 Triton 时可显式选择 `triton_block_sparse`，无需安装 BSA。 |
 | CUDA OOM / 24GB 仍分块 | 释放其他 GPU 进程占用；使用 low_vram、tiny、block offload、256/384 tile 与 always cache offload。自动重试已启用时最多重启请求两次。 |
+| 生成很慢 / GPU 利用率低 | 检查是否强制 low_vram + block、tile 过小或后端为 SDPA。显存充足时使用 balanced + offload=auto + 官方 Triton，重载 PIPE；auto tiling 会忽略手动 tile_size。 |
 | 输出高度不是 1080 | 模型要求宽高均为 128 的倍数；1920×1080 不合法，选 1920×1024 或 1920×1152。需要精确 1080p 时在超分后额外裁切/缩放。 |
 | 色彩、构图或 tile 边缘有差别 | 预处理使用官方中心裁剪/bicubic，比例改变会裁边；可试 `color_fix`。空间 tiles 会改变全局上下文，可增加 tile 或在显存允许时关闭分块。 |
 | 视频静音 / 速度不对 | IMAGE 输入需额外提供音频和真实 FPS，保存节点也使用该 FPS；原生 VIDEO 示例已连好透传。插件不插帧。 |
@@ -378,6 +403,8 @@ To update, run `git -C custom_nodes/ComfyUI-FlashVSR_Plus pull --ff-only` from t
 
 Run **GPU / Backend Check** first. `profile=auto` selects spatially untiled official inference on nominal 24GB+ cards (≥23GiB reported capacity) with ≥18GiB free, and overlapping spatial tiles otherwise. With only SDPA available, targets larger than 512×512 automatically use tiles. Manual profile, tiling and offload overrides are available. A nominal 24GB card reporting 23.9GiB is handled correctly.
 
+Below the untiled threshold, cards with ≥15GiB total and ≥12GiB free automatically use `balanced`; smaller/busier cards use `low_vram`. You can explicitly select `balanced` on a 24GB card too. It uses 768/128 tiles with ≥16GiB free, 512/128 with ≥12GiB free, and conservative block offload below that. SDPA tiles stay capped at 384. Automatic policies are estimates backed by OOM recovery, not guaranteed memory bounds.
+
 The easy installation uses existing PyTorch SDPA and requires no compiled attention extension. For faster full spatial inference, install a compatible `triton` package on Linux or `triton-windows` on Windows. The bundled upstream Triton operator does not import FlashAttention and does not require an nvcc extension build. Optional `block_sparse_attn` is also supported. Auto selection tries **BSA → bundled Triton → SDPA** and executes a tiny CUDA smoke test before selecting an optimized backend. Explicitly requested unavailable backends raise an error.
 
 ### Download and place models
@@ -403,7 +430,7 @@ Turbo/Base and shared decoders come from [ruchangyao/FlashVSR_plus](https://hugg
 ### Quick workflow
 
 1. Drag [native_video.json](example_workflows/native_video.json) into ComfyUI and replace `example.mp4` with your video. For an IMAGE batch or older ComfyUI, start with [image_batch.json](example_workflows/image_batch.json).
-2. Set the Loader to `turbo / auto / auto / auto / tiny` (mode/profile/backend/offload/decoder) and enable automatic download, or install the three files above manually.
+2. Set the Loader to `turbo / auto / auto / auto / tiny` (mode/profile/backend/offload/decoder) and enable automatic download, or install the three files above manually. Use the optional `streaming_video_balanced.json` for larger spatial tiles and within-request weight residency when full-frame inference does not fit.
 3. Start with a short clip and the lower-memory defaults: `scale=1.0`, `height=width=0`, `tiled=auto`, temporal compression 4, decode interval 4 and OOM recovery enabled. Check available resources before increasing the scale or clip length.
 4. The native VIDEO example connects Upscale's `images`, `audio` and `fps` to Create VIDEO, then SaveVideo. In the IMAGE example, replace LoadImage with your video frame loader as needed; connect audio separately and set both Upscale and your video saver to the actual loaded FPS. IMAGE tensors do not carry FPS metadata.
 5. Reuse the Loader's PIPE for additional clips. Use [pipe_reuse.json](example_workflows/pipe_reuse.json) as an example. Keep Loader settings unchanged to allow ComfyUI to reuse its cached object.
@@ -430,7 +457,7 @@ Updating the plugin does not reset widgets in existing workflows. Restart ComfyU
 | `scale`, `height`, `width` | Default scale 1×. Leave dimensions at 0 to use scale with upward 128 alignment; 2× / 4× mean about 4× / 16× pixels. Otherwise set both dimensions to positive multiples of 128, overriding scale. |
 | `temporal_compression` | 4/2/1, default 4. Lower values may help motion and cost more computation. Output frame count/FPS are preserved. |
 | `tiled`, `tile_size`, `tile_overlap` | `auto` uses policy values; `enabled` uses manual values in output pixels. Sizes align to 128, tile ≥256, overlap < tile. |
-| `offload` | `model` releases weights between stages/requests; `block` also moves individual DiT blocks. `auto` follows the profile. |
+| `offload` | `model` releases weights between decode stages/requests; `block` also moves individual DiT blocks. `resident` keeps weights on CUDA within one request and releases them afterward. `disabled` also keeps weights between successful requests. `auto` follows the profile. |
 | `cache_offload` | `auto/always/never` controls official sparse-layer KV cache offload, independently of model weights. |
 | `decoder`, `decode_every` | Default tiny decoder, incremental decoding every 4 latent frames. 0 uses the full timeline. Wan VAE uses the full timeline. |
 | `vae_tiled`, `vae_tile_size`, `vae_tile_overlap` | Native Wan VAE tiling, specified in output pixels; applies only to `decoder=vae`. |
@@ -452,6 +479,10 @@ For long clips, use **`streaming_video.json`: LoadVideo → Upscale VIDEO (Strea
 The node checks temporary disk space before inference and removes input/tile spools on success, failure and cancellation. The returned VIDEO is a temporary file: connect SaveVideo for persistent output. Set ComfyUI `--temp-directory` to a larger disk if needed. Disk usage grows with frame count, output area and tile overlap, even though output RAM does not grow with the full timeline. The standard IMAGE node now rejects a minimum output allocation exceeding 75% of available RAM, reporting the requested dimensions/frame count. Spatial GPU tiling cannot remove the RAM required by a complete IMAGE batch.
 
 ### Troubleshooting
+
+**Speed settings:** retain `scale=1.0` and try `profile=auto` for untiled official inference on a free 24GB card, or the optional balanced example with `balanced / offload=auto / tiled=auto` before forcing block offload. With enough free VRAM it uses larger tiles, automatic KV residency and TinyDecoder auto, and holds model weights on CUDA across decode segments. Weights are released at the end of a request, on cancellation, or before OOM recovery. Only per-instance transfer methods are adapted within the request; official model/attention/temporal math is unchanged. Tiling itself still changes spatial context. `tiled=auto` ignores the manual tile size, and an existing block-offloaded PIPE must be reloaded to regain residency.
+
+Full Turbo weights on an RTX 5090 Laptop, BF16 and official Triton: warmed 17-frame single-tile IMAGE tests took **3.61s → 2.70s at 512×512** and **6.52s → 4.68s at 768×768** when switching model-stage offload to resident weights, with identical output elements. Peak PyTorch allocations rose from 3.83 to 6.99GiB and from 8.44 to 11.62GiB respectively. These are single measurements including cleanup, excluding loading/JIT warmup and file codecs, not long-video throughput guarantees. Run `python scripts/benchmark_speed.py --model-directory /path/to/models/FlashVSR_Plus --size 512 --frames 17` to reproduce on your own GPU with existing local Turbo weights; the script does not download models or start ComfyUI. `info.elapsed_seconds` covers inference attempts only; Loader/input preparation and final weight cleanup are outside it.
 
 - **Missing nodes:** check the plugin directory nesting, install requirements with the Python that starts ComfyUI, restart and inspect its import log. On older ComfyUI, use IMAGE/AUDIO + VideoHelperSuite instead of native VIDEO.
 - **Missing weights/network failure:** follow the exact relative paths in the download table and disable `auto_download` for offline use. Standard Hugging Face networking/cache configuration and `HF_ENDPOINT` are supported; no third-party mirror is selected automatically.
