@@ -1,0 +1,61 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "example.png"
+    }
+  },
+  "2": {
+    "class_type": "FlashVSRPlusLoader",
+    "inputs": {
+      "mode": "turbo",
+      "profile": "auto",
+      "attn_backend": "auto",
+      "offload": "auto",
+      "decoder": "tiny",
+      "auto_download": true,
+      "model_directory": "",
+      "reload_token": 0
+    }
+  },
+  "3": {
+    "class_type": "FlashVSRPlusUpscale",
+    "inputs": {
+      "scale": 4.0,
+      "height": 0,
+      "width": 0,
+      "temporal_compression": 4,
+      "tiled": "auto",
+      "tile_size": 512,
+      "tile_overlap": 128,
+      "color_fix": false,
+      "color_correction_levels": 5,
+      "seed": 1,
+      "cache_offload": "auto",
+      "decode_every": 4,
+      "vae_tiled": true,
+      "vae_tile_size": 256,
+      "vae_tile_overlap": 64,
+      "oom_retry": true,
+      "fps": 24.0,
+      "pipe": [
+        "2",
+        0
+      ],
+      "images": [
+        "1",
+        0
+      ]
+    }
+  },
+  "4": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "3",
+        0
+      ],
+      "filename_prefix": "FlashVSR_Plus/image"
+    }
+  }
+}

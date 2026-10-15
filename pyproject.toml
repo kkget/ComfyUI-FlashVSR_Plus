@@ -1,0 +1,14 @@
+[project]
+name = "comfyui-flashvsr-plus"
+version = "0.1.0"
+description = "Official FlashVSR+ streaming inference with automatic VRAM profiles"
+license = {file = "LICENSE"}
+requires-python = ">=3.10"
+
+[project.urls]
+Repository = "https://github.com/kkget/ComfyUI-FlashVSR_Plus"
+Documentation = "https://github.com/kkget/ComfyUI-FlashVSR_Plus#readme"
+Issues = "https://github.com/kkget/ComfyUI-FlashVSR_Plus/issues"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

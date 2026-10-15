@@ -1,0 +1,12 @@
+# Keep the CUDA-enabled torch installed by ComfyUI. Never downgrade it here.
+einops>=0.8
+imageio>=2.37
+imageio-ffmpeg>=0.6
+numpy>=1.26
+opencv-python-headless>=4.10
+Pillow>=10.0
+safetensors>=0.5
+tqdm>=4.66
+huggingface_hub>=0.28,<2
+# Optional: triton (Linux) or a compatible triton-windows wheel (Windows).
+# Neither FlashAttention nor a locally compiled CUDA extension is required.
