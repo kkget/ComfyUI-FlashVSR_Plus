@@ -1,14 +1,10 @@
 # ComfyUI-FlashVSR_Plus
 
-**作者主页 / Creator:** [Bilibili · 点击访问主页](https://space.bilibili.com/313528845)
-
 官方 [FlashVSR+](https://github.com/OpenImagingLab/FlashVSR_Plus) 的 ComfyUI 节点：Turbo / Base / V1、可复用 PIPE、IMAGE / 原生 VIDEO 输入、自动显存策略、完整时序处理和可选音频透传。
-
-支持 **MiniMax H3（MinimaxH3）等生成视频的超分放大**，也可接在 Wan、LTX 等能够输出 IMAGE 帧批次或视频文件的工作流之后。按输出类型接入，详见 [MiniMax H3 等视频放大](#minimax-h3)。
 
 社区适配插件，使用官方代码与权重；并非 OpenImagingLab 官方发布的 ComfyUI 扩展。模型权重单独下载。
 
-[倍率与内存](#scale-and-memory) · [中文快速开始](#中文快速开始) · [安装](#中文安装) · [模型下载与目录](#模型下载与目录) · [工作流](#示例工作流) · [MiniMax H3 等视频放大](#minimax-h3) · [故障排查](#常见问题) · [English](#english-installation-and-usage) · [实现分析](docs/ARCHITECTURE.md) · [验证记录](docs/VALIDATION.md)
+[倍率与内存](#scale-and-memory) · [中文快速开始](#中文快速开始) · [安装](#中文安装) · [模型下载与目录](#模型下载与目录) · [工作流](#示例工作流) · [故障排查](#常见问题) · [English](#english-installation-and-usage) · [实现分析](docs/ARCHITECTURE.md) · [验证记录](docs/VALIDATION.md)
 
 <a id="scale-and-memory"></a>
 
@@ -307,24 +303,6 @@ flashvsr_external:
 | [streaming_video_api.json](example_workflows/streaming_video_api.json) | 流式 VIDEO 的 `/prompt` 请求体 | 原生 VIDEO API；修改输入文件名后使用 |
 | [streaming_video_balanced_api.json](example_workflows/streaming_video_balanced_api.json) | balanced 流式 VIDEO 的 `/prompt` 请求体 | 原生 VIDEO API；修改输入文件名后使用 |
 
-<a id="minimax-h3"></a>
-
-#### MiniMax H3（MinimaxH3）及其他生成视频的放大
-
-FlashVSR+ 可作为 **MiniMax H3 / Wan / LTX 等视频生成工作流的后处理超分节点**，支持文生视频、图生视频、角色替换等流程生成的结果。接入方式取决于上游输出类型：
-
-| 上游输出 | 连接方式 | 保存方式 |
-|---|---|---|
-| 解码后的 `IMAGE` 帧批次 | 生成工作流的帧输出 → `FlashVSR+ Upscale (IMAGE / VIDEO).images`，Loader 的 `pipe` 接入同一节点 | 输出 `images/audio/fps` → `FlashVSR+ Create VIDEO` → `SaveVideo`，或接 VHS Video Combine |
-| 原生 `VIDEO` | 上游 `VIDEO` → `FlashVSR+ Upscale VIDEO (Streaming).video`，Loader 的 `pipe` 接入同一节点 | 输出 `video` → `SaveVideo` |
-| 已生成的 MP4 等视频文件 | `LoadVideo` 选择视频 → `FlashVSR+ Upscale VIDEO (Streaming)` | 输出 `video` → `SaveVideo` |
-
-上游如果输出 `LATENT`，先用对应生成模型的 VAE 解码为 `IMAGE`。IMAGE 路径需传入原音频并使用实际生成 FPS；Streaming 路径保留来源 FPS，`keep_audio=true` 时保留原有音轨。长视频建议先保存生成结果，再用 [streaming_video.json](example_workflows/streaming_video.json) 读取放大，避免整段 IMAGE 批次占满系统内存。
-
-**先保留 `scale=1.0`、`height=width=0` 运行短片，再根据资源尝试 1.5× / 2× / 4×。** 若原工作流已有 NVIDIA VFX、RealESRGAN 等放大节点，可用本插件替换该放大段；叠加使用时按当前输入尺寸计算最终倍率，避免重复放大。输出仍按 128 对齐，完整内存说明见 [倍率与内存](#scale-and-memory)。
-
-放大阶段使用本 README 中的 FlashVSR+ Turbo / Base / V1 权重；MiniMax H3 等上游生成模型继续由各自工作流加载。
-
 #### 长视频 / 系统内存不足：Streaming VIDEO
 
 拖入 `streaming_video.json`，选择视频，保留 `scale=1.0`、`height=width=0`，设置 Loader `decoder=tiny`，将 Streaming 节点的 `video` 输出直接接 `SaveVideo`。该路径沿用官方 `TemporalVideoStream → StreamRunner(segment_writer=...)`，每个空间 tile 在整段视频中保留连续的 KV/decoder 状态。它不把视频切成彼此独立的推理段，也不创建完整输出 IMAGE 批次。`decode_every` 至少为 4，VAE decoder 暂不支持此文件输出路径。
@@ -460,16 +438,6 @@ Turbo/Base and shared decoders come from [ruchangyao/FlashVSR_plus](https://hugg
 Connect exactly one **IMAGE batch** or native **VIDEO** to Upscale. Outputs are CPU IMAGE frames, unchanged optional AUDIO, source FPS, the same reusable PIPE, and JSON information. Native VIDEO nodes are registered only when the installed ComfyUI provides the relevant API. On older ComfyUI use IMAGE/AUDIO and VideoHelperSuite.
 
 Use a single Loader for multiple Upscale nodes or queue requests. Weights stay available in host RAM while offload releases CUDA allocations between requests. Every new clip starts fresh temporal state. After explicitly unloading a PIPE, change the Loader's `reload_token` to load again.
-
-### Upscale MiniMax H3 and other generated videos
-
-Use FlashVSR+ after **MiniMax H3 (MinimaxH3), Wan, LTX or other video generators** that export decoded IMAGE frames, native VIDEO, or a video file. This works as a postprocessing stage for text-to-video, image-to-video and character replacement workflows:
-
-- **IMAGE frames:** connect the decoded frames to Upscale's `images`, supply the source AUDIO/FPS, then connect its outputs to Create VIDEO → SaveVideo or VHS Video Combine. Decode LATENT output with the generator's VAE first.
-- **Native VIDEO:** connect it to Upscale VIDEO (Streaming), then SaveVideo.
-- **Saved video:** load it with LoadVideo → Upscale VIDEO (Streaming) → SaveVideo. This is recommended for long generated clips to avoid a complete IMAGE batch in RAM; source FPS and optional audio are preserved.
-
-Start at **`scale=1.0`, `height=width=0`**, test a short clip, then increase the scale if resources permit. When replacing an existing upscaler, feed FlashVSR+ the frames from before that upscaler. Chaining multiple upscalers multiplies their scale factors. Output dimensions round upward to 128. FlashVSR+ uses the Turbo/Base/V1 weights listed here; upstream generation models remain managed by their own workflows.
 
 ### Scale and memory: start at 1x
 
